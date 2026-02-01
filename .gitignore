@@ -41,5 +41,6 @@
 *.dwo
 
 build/
+documents/
 temps/
 .trae/
