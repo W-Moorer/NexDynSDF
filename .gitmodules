@@ -1,9 +1,0 @@
-[submodule "third_party/enoki"]
-	path = third_party/enoki
-	url = https://github.com/mitsuba-renderer/enoki.git
-[submodule "third_party/fcpw"]
-	path = third_party/fcpw
-	url = https://github.com/rohan-sawhney/fcpw.git
-[submodule "third_party/icg"]
-	path = third_party/icg
-	url = https://github.com/InteractiveComputerGraphics/InteractiveComputerGraphics.git
