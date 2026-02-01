@@ -1,0 +1,150 @@
+^E:\WORKSPACE\NEXDYNSDF\THIRD_PARTY\ENOKI_LIB-SUBBUILD\CMAKEFILES\3AD88B58EFC499A3FF8EE63453B69AC9\ENOKI_LIB-POPULATE-MKDIR.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -Dcfgdir=/Debug -P E:/workspace/NexDynSDF/third_party/enoki_lib-subbuild/enoki_lib-populate-prefix/tmp/enoki_lib-populate-mkdirs.cmake
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/workspace/NexDynSDF/third_party/enoki_lib-subbuild/enoki_lib-populate-prefix/src/enoki_lib-populate-stamp/Debug/enoki_lib-populate-mkdir
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\WORKSPACE\NEXDYNSDF\THIRD_PARTY\ENOKI_LIB-SUBBUILD\CMAKEFILES\3AD88B58EFC499A3FF8EE63453B69AC9\ENOKI_LIB-POPULATE-DOWNLOAD.RULE
+setlocal
+cd E:\workspace\NexDynSDF\third_party
+if %errorlevel% neq 0 goto :cmEnd
+E:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE -P E:/workspace/NexDynSDF/third_party/enoki_lib-subbuild/enoki_lib-populate-prefix/tmp/enoki_lib-populate-gitclone.cmake
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/workspace/NexDynSDF/third_party/enoki_lib-subbuild/enoki_lib-populate-prefix/src/enoki_lib-populate-stamp/Debug/enoki_lib-populate-download
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\WORKSPACE\NEXDYNSDF\THIRD_PARTY\ENOKI_LIB-SUBBUILD\CMAKEFILES\3AD88B58EFC499A3FF8EE63453B69AC9\ENOKI_LIB-POPULATE-UPDATE.RULE
+setlocal
+cd E:\workspace\NexDynSDF\third_party\enoki_lib-src
+if %errorlevel% neq 0 goto :cmEnd
+E:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -Dcan_fetch=YES -DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE -P E:/workspace/NexDynSDF/third_party/enoki_lib-subbuild/enoki_lib-populate-prefix/tmp/enoki_lib-populate-gitupdate.cmake
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\WORKSPACE\NEXDYNSDF\THIRD_PARTY\ENOKI_LIB-SUBBUILD\CMAKEFILES\3AD88B58EFC499A3FF8EE63453B69AC9\ENOKI_LIB-POPULATE-PATCH.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/workspace/NexDynSDF/third_party/enoki_lib-subbuild/enoki_lib-populate-prefix/src/enoki_lib-populate-stamp/Debug/enoki_lib-populate-patch
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\WORKSPACE\NEXDYNSDF\THIRD_PARTY\ENOKI_LIB-SUBBUILD\CMAKEFILES\3AD88B58EFC499A3FF8EE63453B69AC9\ENOKI_LIB-POPULATE-CONFIGURE.RULE
+setlocal
+cd E:\workspace\NexDynSDF\third_party\enoki_lib-build
+if %errorlevel% neq 0 goto :cmEnd
+E:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/workspace/NexDynSDF/third_party/enoki_lib-subbuild/enoki_lib-populate-prefix/src/enoki_lib-populate-stamp/Debug/enoki_lib-populate-configure
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\WORKSPACE\NEXDYNSDF\THIRD_PARTY\ENOKI_LIB-SUBBUILD\CMAKEFILES\3AD88B58EFC499A3FF8EE63453B69AC9\ENOKI_LIB-POPULATE-BUILD.RULE
+setlocal
+cd E:\workspace\NexDynSDF\third_party\enoki_lib-build
+if %errorlevel% neq 0 goto :cmEnd
+E:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/workspace/NexDynSDF/third_party/enoki_lib-subbuild/enoki_lib-populate-prefix/src/enoki_lib-populate-stamp/Debug/enoki_lib-populate-build
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\WORKSPACE\NEXDYNSDF\THIRD_PARTY\ENOKI_LIB-SUBBUILD\CMAKEFILES\3AD88B58EFC499A3FF8EE63453B69AC9\ENOKI_LIB-POPULATE-INSTALL.RULE
+setlocal
+cd E:\workspace\NexDynSDF\third_party\enoki_lib-build
+if %errorlevel% neq 0 goto :cmEnd
+E:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/workspace/NexDynSDF/third_party/enoki_lib-subbuild/enoki_lib-populate-prefix/src/enoki_lib-populate-stamp/Debug/enoki_lib-populate-install
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\WORKSPACE\NEXDYNSDF\THIRD_PARTY\ENOKI_LIB-SUBBUILD\CMAKEFILES\3AD88B58EFC499A3FF8EE63453B69AC9\ENOKI_LIB-POPULATE-TEST.RULE
+setlocal
+cd E:\workspace\NexDynSDF\third_party\enoki_lib-build
+if %errorlevel% neq 0 goto :cmEnd
+E:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/workspace/NexDynSDF/third_party/enoki_lib-subbuild/enoki_lib-populate-prefix/src/enoki_lib-populate-stamp/Debug/enoki_lib-populate-test
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\WORKSPACE\NEXDYNSDF\THIRD_PARTY\ENOKI_LIB-SUBBUILD\CMAKEFILES\B99CF806470D9A7597DDD92FA1CC7686\ENOKI_LIB-POPULATE-COMPLETE.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E make_directory E:/workspace/NexDynSDF/third_party/enoki_lib-subbuild/CMakeFiles/Debug
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/workspace/NexDynSDF/third_party/enoki_lib-subbuild/CMakeFiles/Debug/enoki_lib-populate-complete
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/workspace/NexDynSDF/third_party/enoki_lib-subbuild/enoki_lib-populate-prefix/src/enoki_lib-populate-stamp/Debug/enoki_lib-populate-done
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\WORKSPACE\NEXDYNSDF\THIRD_PARTY\ENOKI_LIB-SUBBUILD\CMAKEFILES\F251AB83396AE095BA219FB0F5EC7FF2\ENOKI_LIB-POPULATE.RULE
+setlocal
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\WORKSPACE\NEXDYNSDF\THIRD_PARTY\ENOKI_LIB-SUBBUILD\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SE:/workspace/NexDynSDF/third_party/enoki_lib-subbuild -BE:/workspace/NexDynSDF/third_party/enoki_lib-subbuild --check-stamp-file E:/workspace/NexDynSDF/third_party/enoki_lib-subbuild/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

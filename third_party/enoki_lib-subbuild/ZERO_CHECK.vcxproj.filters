@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="E:\workspace\NexDynSDF\third_party\enoki_lib-subbuild\CMakeFiles\f251ab83396ae095ba219fb0f5ec7ff2\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{10107232-9EA8-36ED-BB62-394C479F73ED}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "E:/workspace/NexDynSDF/third_party/fcpw_lib-subbuild/CMakeFiles/fcpw_lib-populate"
+		},
+		{
+			"file" : "E:/workspace/NexDynSDF/third_party/fcpw_lib-subbuild/CMakeFiles/56cb7c5cd8ec1bf185006c9f01584bbe/fcpw_lib-populate.rule"
+		},
+		{
+			"file" : "E:/workspace/NexDynSDF/third_party/fcpw_lib-subbuild/CMakeFiles/4150db4e8dcf25e34782ecd0e54dd427/fcpw_lib-populate-complete.rule"
+		},
+		{
+			"file" : "E:/workspace/NexDynSDF/third_party/fcpw_lib-subbuild/CMakeFiles/537a2b1db8a0fdf16d0f0c07396e68b2/fcpw_lib-populate-build.rule"
+		},
+		{
+			"file" : "E:/workspace/NexDynSDF/third_party/fcpw_lib-subbuild/CMakeFiles/537a2b1db8a0fdf16d0f0c07396e68b2/fcpw_lib-populate-configure.rule"
+		},
+		{
+			"file" : "E:/workspace/NexDynSDF/third_party/fcpw_lib-subbuild/CMakeFiles/537a2b1db8a0fdf16d0f0c07396e68b2/fcpw_lib-populate-download.rule"
+		},
+		{
+			"file" : "E:/workspace/NexDynSDF/third_party/fcpw_lib-subbuild/CMakeFiles/537a2b1db8a0fdf16d0f0c07396e68b2/fcpw_lib-populate-install.rule"
+		},
+		{
+			"file" : "E:/workspace/NexDynSDF/third_party/fcpw_lib-subbuild/CMakeFiles/537a2b1db8a0fdf16d0f0c07396e68b2/fcpw_lib-populate-mkdir.rule"
+		},
+		{
+			"file" : "E:/workspace/NexDynSDF/third_party/fcpw_lib-subbuild/CMakeFiles/537a2b1db8a0fdf16d0f0c07396e68b2/fcpw_lib-populate-patch.rule"
+		},
+		{
+			"file" : "E:/workspace/NexDynSDF/third_party/fcpw_lib-subbuild/CMakeFiles/537a2b1db8a0fdf16d0f0c07396e68b2/fcpw_lib-populate-test.rule"
+		},
+		{
+			"file" : "E:/workspace/NexDynSDF/third_party/fcpw_lib-subbuild/CMakeFiles/537a2b1db8a0fdf16d0f0c07396e68b2/fcpw_lib-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"fcpw_lib-populate"
+		],
+		"name" : "fcpw_lib-populate"
+	}
+}

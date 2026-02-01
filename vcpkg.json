@@ -1,0 +1,11 @@
+{
+  "name": "nexdynsdf",
+  "version": "0.1.0",
+  "description": "Dynamic SDF computation project",
+  "dependencies": [
+    "glm",
+    "spdlog",
+    "cereal",
+    "eigen3"
+  ]
+}

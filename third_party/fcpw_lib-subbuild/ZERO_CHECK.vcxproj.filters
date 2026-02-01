@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="E:\workspace\NexDynSDF\third_party\fcpw_lib-subbuild\CMakeFiles\56cb7c5cd8ec1bf185006c9f01584bbe\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{63510088-03D1-3222-8C24-DCE40E04CC53}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

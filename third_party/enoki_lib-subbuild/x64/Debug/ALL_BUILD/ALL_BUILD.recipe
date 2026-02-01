@@ -1,0 +1,17 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <ProjectOutputs>
+    <ProjectOutput>
+      <FullPath>E:\workspace\NexDynSDF\third_party\enoki_lib-subbuild\x64\Debug\ZERO_CHECK</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>E:\workspace\NexDynSDF\third_party\enoki_lib-subbuild\x64\Debug\enoki_lib-populate</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>E:\workspace\NexDynSDF\third_party\enoki_lib-subbuild\x64\Debug\ALL_BUILD</FullPath>
+    </ProjectOutput>
+  </ProjectOutputs>
+  <ContentFiles />
+  <SatelliteDlls />
+  <NonRecipeFileRefs />
+</Project>

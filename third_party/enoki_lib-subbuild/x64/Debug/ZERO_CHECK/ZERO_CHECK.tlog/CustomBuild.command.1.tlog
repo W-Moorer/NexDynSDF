@@ -1,0 +1,10 @@
+^E:\WORKSPACE\NEXDYNSDF\THIRD_PARTY\ENOKI_LIB-SUBBUILD\CMAKEFILES\F251AB83396AE095BA219FB0F5EC7FF2\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SE:/workspace/NexDynSDF/third_party/enoki_lib-subbuild -BE:/workspace/NexDynSDF/third_party/enoki_lib-subbuild --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file E:/workspace/NexDynSDF/third_party/enoki_lib-subbuild/enoki_lib-populate.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

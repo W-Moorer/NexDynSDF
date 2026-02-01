@@ -1,0 +1,10 @@
+^E:\WORKSPACE\NEXDYNSDF\THIRD_PARTY\FCPW_LIB-SUBBUILD\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SE:/workspace/NexDynSDF/third_party/fcpw_lib-subbuild -BE:/workspace/NexDynSDF/third_party/fcpw_lib-subbuild --check-stamp-file E:/workspace/NexDynSDF/third_party/fcpw_lib-subbuild/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
