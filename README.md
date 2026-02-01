@@ -1,5 +1,7 @@
 # NexDynSDF
 
+> 本项目基于 [SdfLib](https://github.com/UPC-ViRVIG/SdfLib) 进行开发，感谢 UPC-ViRVIG 团队提供的优秀开源实现。
+
 NexDynSDF 是一个高性能的有符号距离场（Signed Distance Field, SDF）计算库，支持从三角网格（OBJ/VTP格式）生成自适应八叉树SDF和精确八叉树SDF。
 
 ## 功能特性
@@ -289,6 +291,15 @@ ctest --output-on-configuration
 本项目基于参考项目迁移开发，遵循原始代码的许可证条款。
 
 ## 致谢
+
+本项目基于 [SdfLib](https://github.com/UPC-ViRVIG/SdfLib) 项目进行开发，感谢 UPC-ViRVIG 团队提供的优秀开源实现。NexDynSDF 在 SdfLib 的基础上进行了以下改进和扩展：
+
+- 使用 vcpkg manifest 模式管理依赖，优化依赖安装流程
+- 引入 FetchContent 缓存机制，避免重复下载依赖
+- 扩展输入格式支持（OBJ/VTP）
+- 优化构建配置和工具链支持
+
+### 使用的第三方库
 
 - [Enoki](https://github.com/mitsuba-renderer/enoki) - 向量化库
 - [FCPW](https://github.com/rohan-sawhney/fcpw) - 快速最近点查询库
