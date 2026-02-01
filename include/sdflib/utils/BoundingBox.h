@@ -9,14 +9,27 @@
 #include <array>
 #include <algorithm>
 #include <cereal/cereal.hpp>
+#include <cereal/types/array.hpp>
 
-// glm::vec3 serialization for cereal
+// glm serialization for cereal
 namespace glm
 {
+    template<class Archive>
+    void serialize(Archive& archive, glm::vec2& v)
+    {
+        archive(v.x, v.y);
+    }
+    
     template<class Archive>
     void serialize(Archive& archive, glm::vec3& v)
     {
         archive(v.x, v.y, v.z);
+    }
+    
+    template<class Archive>
+    void serialize(Archive& archive, glm::mat3& m)
+    {
+        archive(m[0], m[1], m[2]);
     }
 }
 

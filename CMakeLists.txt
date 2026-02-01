@@ -63,9 +63,12 @@ find_package(OpenMP REQUIRED)
 add_library(sdflib STATIC
     src/SdfFunction.cpp
     src/OctreeSdf.cpp
+    src/OctreeSdfUniform.cpp
     src/ExactOctreeSdf.cpp
     src/utils/Mesh.cpp
     src/utils/Timer.cpp
+    src/utils/GJK.cpp
+    src/utils/TriangleUtils.cpp
 )
 
 target_include_directories(sdflib PUBLIC

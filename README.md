@@ -6,23 +6,45 @@ NexDynSDF 是一个高性能的有符号距离场（Signed Distance Field, SDF�
 
 ## 功能特性
 
-- **自适应八叉树SDF (OctreeSdf)**: 基于自适应细分的八叉树结构，支持多种初始化算法
-  - `CONTINUITY`: 保证SDF连续性的算法
-  - `NO_CONTINUITY`: 不保证连续性的快速算法
-  - `UNIFORM`: 均匀细分算法
+### 自适应八叉树SDF (OctreeSdf)
+基于论文 *"Adaptive approximation of signed distance fields through piecewise continuous interpolation"* (Computers & Graphics 114, 2023) 的完整实现：
 
-- **精确八叉树SDF (ExactOctreeSdf)**: 基于 ICG (Improved Closest Point Query) 算法的精确距离查询
+- **插值方法**：
+  - 三线性插值 (Trilinear)：8个系数，保证 $C^0$ 连续
+  - 三三次插值 (Tricubic)：64个系数，支持 $C^1$ 连续（默认）
 
-- **支持的输入格式**:
-  - OBJ 三角网格文件
-  - VTP (VTK PolyData) 文件
+- **误差估计策略**：
+  - 梯形法则 (Trapezoidal Rule)：基于 $\{0, 0.5, 1\}^3$ 采样点的数值积分
+  - 辛普森法则 (Simpson's Rule)：更高精度的数值积分
+  - 距离衰减规则 (By Distance)：基于到表面距离的自适应误差阈值
 
-- **输出格式**: 二进制序列化格式（使用 Cereal 库），支持快速加载
+- **构建算法**：
+  - `CONTINUITY`：BFS构建，强制跨层级连续性（推荐）
+  - `NO_CONTINUITY`：DFS构建，无连续性保证但更快
+  - `UNIFORM`：均匀细分到最大深度
 
-- **性能优化**:
-  - OpenMP 多线程并行计算
-  - AVX2/SSE 向量化指令集优化
-  - 依赖缓存机制，避免重复下载
+- **连续性保证**：
+  - 同尺寸邻居：天然 $C^0$/$C^1$ 连续
+  - 跨层级邻居：通过"匹配邻居插值"强制连续性
+
+### 精确八叉树SDF (ExactOctreeSdf)
+基于论文 *"Triangle Influence Supersets for Fast Distance Computation"* (CGF 2023) 的实现：
+
+- **三角形影响区域**：使用GJK算法计算三角形影响超集
+- **快速剔除**：基于包围盒和GJK距离计算的三角形筛选
+- **精确查询**：使用 TriangleMeshDistance 库进行精确距离计算
+
+### 支持的输入格式
+- OBJ 三角网格文件
+- VTP (VTK PolyData) 文件
+
+### 输出格式
+- 二进制序列化格式（使用 Cereal 库），支持快速加载
+
+### 性能优化
+- OpenMP 多线程并行计算
+- AVX2/SSE 向量化指令集优化
+- 依赖缓存机制，避免重复下载
 
 ## 项目结构
 
@@ -32,20 +54,30 @@ NexDynSDF/
 ├── vcpkg.json              # vcpkg 依赖清单
 ├── include/
 │   └── sdflib/
-│       ├── SdfFunction.h          # SDF 基类
-│       ├── OctreeSdf.h            # 自适应八叉树SDF
-│       ├── ExactOctreeSdf.h       # 精确八叉树SDF
-│       ├── TriangleMeshDistance.h # ICG 距离查询库
+│       ├── SdfFunction.h           # SDF 基类
+│       ├── OctreeSdf.h             # 自适应八叉树SDF
+│       ├── ExactOctreeSdf.h        # 精确八叉树SDF
+│       ├── InterpolationMethods.h  # 插值方法（三线性/三三次）
+│       ├── OctreeSdfUtils.h        # 误差估计函数
+│       ├── TrianglesInfluence.h    # 三角形影响区域计算
+│       ├── OctreeSdfBreadthFirst.h # BFS构建+连续性
+│       ├── OctreeSdfDepthFirst.h   # DFS构建
+│       ├── TriangleMeshDistance.h  # ICG 距离查询库
 │       └── utils/
-│           ├── Mesh.h             # 网格加载工具
-│           ├── BoundingBox.h      # 包围盒工具
-│           └── Timer.h            # 计时器工具
+│           ├── Mesh.h              # 网格加载工具
+│           ├── TriangleUtils.h     # 三角形工具
+│           ├── GJK.h               # GJK算法
+│           ├── BoundingBox.h       # 包围盒工具
+│           └── Timer.h             # 计时器工具
 ├── src/
 │   ├── SdfFunction.cpp
 │   ├── OctreeSdf.cpp
+│   ├── OctreeSdfUniform.cpp
 │   ├── ExactOctreeSdf.cpp
 │   └── utils/
 │       ├── Mesh.cpp
+│       ├── TriangleUtils.cpp
+│       ├── GJK.cpp
 │       └── Timer.cpp
 ├── tools/
 │   └── SdfExporter/
@@ -187,7 +219,7 @@ Options:
 ### 使用示例
 
 ```powershell
-# 生成自适应八叉树SDF
+# 生成自适应八叉树SDF（默认使用三三次插值+连续性）
 .\SdfExporter models/obj/bunny.obj output/bunny_octree.bin --depth 8 --algorithm continuity
 
 # 生成精确八叉树SDF
@@ -211,7 +243,7 @@ sdflib::Mesh mesh("path/to/model.obj");
 sdflib::BoundingBox box = mesh.getBoundingBox();
 box.addMargin(0.1f * box.getSize().x);
 
-// 创建八叉树SDF
+// 创建八叉树SDF（使用三三次插值和连续性）
 sdflib::OctreeSdf sdf(mesh, box, 
     /*depth=*/8, 
     /*startDepth=*/1,
@@ -227,27 +259,129 @@ float distance = sdf.getDistance(point);
 sdf.saveToFile("output.sdf");
 
 // 从文件加载
-sdflib::OctreeSdf loadedSdf;
-loadedSdf.loadFromFile("output.sdf");
+auto loadedSdf = sdflib::SdfFunction::loadFromFile("output.sdf");
 ```
 
 ## 算法说明
 
-### 自适应八叉树SDF
+### 自适应八叉树SDF (OctreeSdf)
 
-基于论文 "Adaptive Sparse Octree SDF" 的实现，通过自适应细分平衡精度和存储：
+基于论文 *"Adaptive approximation of signed distance fields through piecewise continuous interpolation"* (Computers & Graphics 114, 2023) 的完整实现：
 
-- 在表面附近使用较深的八叉树层级
-- 在远离表面区域使用较浅的层级
-- 支持多种细分策略以适应不同应用场景
+#### 1. 插值多项式
 
-### 精确八叉树SDF
+**三线性插值 (Trilinear)**：
+- 8个系数，对应单位立方体8个顶点的值
+- 保证 $C^0$ 连续性
+- 公式：$g(x,y,z) = \sum_{i=0}^{1}\sum_{j=0}^{1}\sum_{k=0}^{1} a_{ijk}\,x^{i}y^{j}z^{k}$
 
-基于 ICG (Improved Closest Point Query) 算法，使用 `TriangleMeshDistance.h` 实现：
+**三三次插值 (Tricubic)**：
+- 64个系数，基于 Lekien & Marsden 的约束体系
+- 每个顶点8个值：值 + 梯度(3) + 二阶导(3) + 三阶导(1)
+- 支持 $C^1$ 连续性（跨层级）
+- 公式：$g(x,y,z) = \sum_{i=0}^{3}\sum_{j=0}^{3}\sum_{k=0}^{3} a_{ijk}\,x^{i}y^{j}z^{k}$
 
-- 精确计算点到三角网格的有符号距离
-- 支持内部/外部判断
-- 适合需要高精度距离查询的应用
+#### 2. 误差估计
+
+使用数值求积近似 RMSE：
+
+$$
+\mathrm{RMSE}(g) = \sqrt{\int_0^1\int_0^1\int_0^1 (g-f)^2 \,dx\,dy\,dz}
+$$
+
+**梯形法则**：
+- 采样点：$\{0, 0.5, 1\}^3$，共27个点
+- 额外查询：19次（排除8个顶点，因为顶点处 $g=f$）
+- 权重：张量积形式 $(1,2,1) \otimes (1,2,1) \otimes (1,2,1)$
+
+**辛普森法则**：
+- 更高精度的数值积分
+- 使用相同的采样点但不同权重
+
+#### 3. 连续性强制
+
+**问题**：不同深度邻居共享面/边时，非共享顶点会导致不连续
+
+**解决方案**：
+1. 使用BFS（广度优先）按层构建
+2. 第一遍：计算误差，决定哪些节点细分
+3. 第二遍：
+   - 不细分的节点：写入为叶子
+   - 细分的节点：创建子节点，对共享面/边上的非共享顶点，使用邻居的插值结果（而非真实场值）
+
+**梯度缩放**：
+- 世界坐标梯度需乘以节点尺寸 $L$
+- 二阶导数乘以 $L^2$
+- 三阶导数乘以 $L^3$
+
+### 精确八叉树SDF (ExactOctreeSdf)
+
+基于论文 *"Triangle Influence Supersets for Fast Distance Computation"* (CGF 2023) 的实现：
+
+#### 1. 三角形影响区域
+
+使用GJK算法计算每个三角形的影响超集：
+- 对节点8个顶点计算到三角形的距离范围
+- 通过GJK距离计算确定最小/最大距离
+- 筛选出可能影响节点内任意点的三角形
+
+#### 2. 构建流程
+
+1. 计算所有三角形的预计算数据（法线、包围盒等）
+2. 自顶向下遍历八叉树
+3. 对每个节点：
+   - 使用GJK计算三角形影响超集
+   - 筛选出可能包含最近三角形的候选集
+   - 对8个顶点计算精确距离
+4. 达到最大深度时存储为叶子
+
+#### 3. 查询优化
+
+- 使用 TriangleMeshDistance 库（ICG算法）
+- 支持精确的有符号距离计算
+- 角度加权伪法线用于符号判定
+
+## 实现细节
+
+### 插值方法切换
+
+默认使用三三次插值，可在 `OctreeSdf.cpp` 中切换：
+
+```cpp
+// 三线性插值（8系数，C0连续）
+typedef TriLinearInterpolation InterpolationMethod;
+
+// 三三次插值（64系数，C1连续）- 默认
+typedef TriCubicInterpolation InterpolationMethod;
+```
+
+### 终止规则
+
+```cpp
+// 梯形法则 - 默认
+OctreeSdf::TerminationRule::TRAPEZOIDAL_RULE
+
+// 辛普森法则
+OctreeSdf::TerminationRule::SIMPSONS_RULE
+
+// 距离衰减规则
+OctreeSdf::TerminationRule::BY_DISTANCE_RULE
+
+// 无限制（细分到最大深度）
+OctreeSdf::TerminationRule::NONE
+```
+
+### 多线程支持
+
+使用 `initOctreeWithContinuityNoDelay` 算法支持多线程：
+
+```cpp
+OctreeSdf sdf(mesh, box, depth, startDepth, 
+    OctreeSdf::TerminationRule::TRAPEZOIDAL_RULE,
+    TerminationRuleParams::setTrapezoidalRuleParams(1e-3f),
+    OctreeSdf::InitAlgorithm::CONTINUITY,
+    /*numThreads=*/8);  // 使用8线程
+```
 
 ## 常见问题
 
@@ -273,6 +407,10 @@ cmake .. -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmak
 
 确保 `FETCHCONTENT_BASE_DIR` 在 `include(FetchContent)` 之前设置。查看 `CMakeLists.txt` 中的配置顺序。
 
+### 4. 三三次插值内存占用大
+
+三三次插值每个叶子节点存储64个float（256字节），比三线性的8个float（32字节）大8倍。对于内存敏感的应用，可切换为三线性插值。
+
 ## 测试
 
 ```powershell
@@ -286,21 +424,24 @@ ctest --output-on-configuration
 .\Release\test_all.exe
 ```
 
+## 参考文献
+
+1. **Adaptive Octree SDF**: 
+   - *"Adaptive approximation of signed distance fields through piecewise continuous interpolation"*, Computers & Graphics 114, 2023
+
+2. **Exact Octree SDF**:
+   - *"Triangle Influence Supersets for Fast Distance Computation"*, Computer Graphics Forum (CGF) 2023
+
+3. **Tricubic Interpolation**:
+   - Lekien & Marsden, *"Tricubic interpolation in three dimensions"*
+
+4. **TriangleMeshDistance**:
+   - José Antonio Fernández Fernández, *"Triangle Mesh Distance"* (MIT License)
+
 ## 许可证
 
 本项目基于参考项目迁移开发，遵循原始代码的许可证条款。
 
 ## 致谢
 
-本项目基于 [SdfLib](https://github.com/UPC-ViRVIG/SdfLib) 项目进行开发，感谢 UPC-ViRVIG 团队提供的优秀开源实现。NexDynSDF 在 SdfLib 的基础上进行了以下改进和扩展：
-
-- 使用 vcpkg manifest 模式管理依赖，优化依赖安装流程
-- 引入 FetchContent 缓存机制，避免重复下载依赖
-- 扩展输入格式支持（OBJ/VTP）
-- 优化构建配置和工具链支持
-
-### 使用的第三方库
-
-- [Enoki](https://github.com/mitsuba-renderer/enoki) - 向量化库
-- [FCPW](https://github.com/rohan-sawhney/fcpw) - 快速最近点查询库
-- [ICG](https://github.com/InteractiveComputerGraphics) - 距离查询算法
+本项目基于 [SdfLib](https://github.com/UPC-ViRVIG/SdfLib) 项目进行开发，感谢 UPC-ViRVIG 团队提供的优秀开源实现。NexDynSDF 在 SdfLib 的基础上进行了改进和扩展。
