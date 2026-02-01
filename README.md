@@ -80,8 +80,14 @@ NexDynSDF/
 │       ├── GJK.cpp
 │       └── Timer.cpp
 ├── tools/
-│   └── SdfExporter/
-│       └── main.cpp        # SDF导出工具主程序
+│   ├── SdfExporter/
+│   │   └── main.cpp        # SDF导出工具主程序
+│   └── SdfSampler/
+│       └── main.cpp        # SDF空间采样工具主程序
+├── pytools/
+│   ├── visualize_sdf.py              # Matplotlib/Plotly可视化脚本
+│   ├── visualize_sdf_pyvista.py      # PyVista交互式可视化脚本
+│   └── visualize_sdf_pyvista_offscreen.py  # PyVista离屏渲染脚本
 ├── tests/
 │   └── test_all.cpp        # 单元测试
 └── third_party/            # FetchContent 缓存目录
@@ -99,6 +105,8 @@ NexDynSDF/
 
 ### 库依赖
 
+#### C++ 依赖
+
 | 库名 | 版本 | 获取方式 | 用途 |
 |------|------|----------|------|
 | glm | >= 0.9.9.8 | vcpkg | 向量数学库 |
@@ -107,6 +115,16 @@ NexDynSDF/
 | eigen3 | >= 3.4.0 | vcpkg | 矩阵运算 |
 | enoki | 2a18afa | FetchContent | 向量化优化 |
 | fcpw | dd65ec2 | FetchContent | 快速最近点查询 |
+
+#### Python 可视化依赖（可选）
+
+```powershell
+# PyVista 可视化（推荐）
+pip install numpy pyvista
+
+# Matplotlib/Plotly 可视化（备选）
+pip install numpy scipy matplotlib plotly scikit-image
+```
 
 ## 构建说明
 
@@ -172,6 +190,9 @@ cmake --build . --config Release
 # 运行 SDF 导出工具
 .\Release\SdfExporter.exe
 
+# 运行 SDF 采样工具
+.\Release\SdfSampler.exe input.bin output.raw 128
+
 # 运行测试
 .\Release\test_all.exe
 ```
@@ -199,9 +220,15 @@ cmake --build . --config Release
 }
 ```
 
-## 使用说明
+## 工具说明
 
 ### SdfExporter 工具
+
+将三角网格（OBJ/VTP）转换为SDF二进制文件。
+
+**位置**: `build/Release/SdfExporter.exe`
+
+**用法**:
 
 ```
 SdfExporter <input.vtp> <output.bin> [options]
@@ -216,7 +243,56 @@ Options:
   --help                   显示帮助信息
 ```
 
+### SdfSampler 工具
+
+将SDF二进制文件采样为均匀网格的RAW格式，便于可视化和后续处理。
+
+**位置**: `build/Release/SdfSampler.exe`
+
+**用法**:
+
+```
+SdfSampler <input_sdf_file> <output_raw_file> [grid_resolution]
+
+参数:
+  input_sdf_file    : SDF二进制文件路径
+  output_raw_file   : 输出RAW文件路径
+  grid_resolution   : 网格分辨率（默认: 128）
+```
+
+**输出文件格式**:
+
+| 字段 | 类型 | 大小 | 说明 |
+|------|------|------|------|
+| gridRes | int32 | 4 bytes | 网格分辨率（立方体） |
+| bbox_min.x | float32 | 4 bytes | 包围盒最小X |
+| bbox_min.y | float32 | 4 bytes | 包围盒最小Y |
+| bbox_min.z | float32 | 4 bytes | 包围盒最小Z |
+| bbox_max.x | float32 | 4 bytes | 包围盒最大X |
+| bbox_max.y | float32 | 4 bytes | 包围盒最大Y |
+| bbox_max.z | float32 | 4 bytes | 包围盒最大Z |
+| grid_data | float32[] | gridRes³ × 4 bytes | 距离场数据 |
+
+**Python读取示例**:
+
+```python
+import struct
+import numpy as np
+
+def load_raw_sdf(filepath):
+    with open(filepath, 'rb') as f:
+        grid_res = struct.unpack('i', f.read(4))[0]
+        bbox_min = struct.unpack('fff', f.read(12))
+        bbox_max = struct.unpack('fff', f.read(12))
+        num_voxels = grid_res ** 3
+        grid_data = np.frombuffer(f.read(num_voxels * 4), dtype=np.float32)
+        grid_data = grid_data.reshape((grid_res, grid_res, grid_res))
+    return grid_data, bbox_min, bbox_max
+```
+
 ### 使用示例
+
+#### 1. 生成SDF文件
 
 ```powershell
 # 生成自适应八叉树SDF（默认使用三三次插值+连续性）
@@ -227,6 +303,63 @@ Options:
 
 # 使用多线程加速
 .\SdfExporter models/obj/bunny.obj output/bunny.bin --depth 8 --num_threads 8
+```
+
+#### 2. 空间采样（用于可视化）
+
+```powershell
+# 基本用法：将SDF文件采样为均匀网格
+.\SdfSampler output/bunny_octree.bin output/bunny_sampled.raw 128
+
+# 参数说明：
+#   参数1: 输入SDF文件路径
+#   参数2: 输出RAW文件路径
+#   参数3: 网格分辨率（默认128，可选）
+```
+
+采样后的 `.raw` 文件格式：
+- **Header** (28 bytes): gridRes(int) + bbox_min(3×float) + bbox_max(3×float)
+- **Data** (gridRes³ × float): 距离场数据
+
+#### 3. 可视化
+
+使用 PyVista 进行3D可视化：
+
+```powershell
+# 交互式可视化
+python pytools/visualize_sdf_pyvista.py output/bunny_sampled.raw
+
+# 生成静态图片（离屏渲染）
+python pytools/visualize_sdf_pyvista_offscreen.py output/bunny_sampled.raw -o output/bunny.png
+
+# 对比两个SDF
+python pytools/visualize_sdf_pyvista.py output/bunny_approx.raw output/bunny_exact.raw
+```
+
+使用 Matplotlib/Plotly 可视化（备选）：
+
+```powershell
+# 静态可视化
+python pytools/visualize_sdf.py output/bunny_sampled.raw --static
+
+# 交互式可视化
+python pytools/visualize_sdf.py output/bunny_sampled.raw
+
+# 对比两个SDF
+python pytools/visualize_sdf.py approx.raw exact.raw --compare
+```
+
+#### 4. 完整工作流程示例
+
+```powershell
+# 步骤1: 从OBJ生成SDF
+.\SdfExporter models/obj/Gear.obj output/gear.bin --depth 6 --algorithm continuity
+
+# 步骤2: 空间采样（256x256x256分辨率）
+.\SdfSampler output/gear.bin output/gear_sampled.raw 256
+
+# 步骤3: 可视化
+python pytools/visualize_sdf_pyvista_offscreen.py output/gear_sampled.raw -o output/gear.png
 ```
 
 ### 在代码中使用
