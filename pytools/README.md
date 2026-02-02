@@ -9,6 +9,8 @@
 | 工具 | 功能 | 可视化库 |
 |------|------|----------|
 | `nsm_reader.py` | NSM网格文件读取与可视化（含法向量） | PyVista |
+| `nagata_patch.py` | Nagata曲面插值计算模块 | - |
+| `visualize_nagata.py` | Nagata曲面可视化与对比 | PyVista |
 | `visualize_sdf.py` | SDF零等值面可视化 | Matplotlib / Plotly |
 | `visualize_sdf_pyvista.py` | SDF零等值面可视化（交互式） | PyVista |
 | `visualize_sdf_pyvista_offscreen.py` | SDF零等值面可视化（离屏渲染保存图片） | PyVista |
@@ -91,7 +93,104 @@ visualize_nsm('../models/nsm/Gear_I.nsm',
 
 ---
 
-## 2. visualize_sdf.py - SDF零等值面可视化（Matplotlib/Plotly）
+## 2. nagata_patch.py - Nagata曲面插值计算模块
+
+### 功能
+- 基于Nagata (2005)算法计算二次曲面插值
+- 从顶点位置和法向量计算曲率系数
+- 对三角形网格生成光滑Nagata曲面采样
+
+### 核心函数
+
+| 函数 | 功能 |
+|------|------|
+| `compute_curvature(d, n0, n1)` | 计算边的曲率系数向量 |
+| `nagata_patch(x00, x10, x11, n00, n10, n11)` | 计算三角形三条边的曲率系数 |
+| `evaluate_nagata_patch(x00, x10, x11, c1, c2, c3, u, v)` | 在参数域采样点计算曲面坐标 |
+| `sample_nagata_triangle(x00, x10, x11, n00, n10, n11, resolution)` | 对单个三角形采样Nagata曲面 |
+| `sample_all_nagata_patches(vertices, triangles, normals, resolution)` | 对整个网格采样 |
+
+### 在Python代码中使用
+```python
+from nagata_patch import nagata_patch, sample_all_nagata_patches
+from nsm_reader import load_nsm
+
+# 加载NSM数据
+data = load_nsm('model.nsm')
+
+# 对整个网格采样Nagata曲面
+verts, faces, face_map = sample_all_nagata_patches(
+    data.vertices, 
+    data.triangles, 
+    data.tri_vertex_normals,
+    resolution=10
+)
+```
+
+### 算法原理
+
+Nagata曲面参数方程:
+```
+x(u,v) = x00*(1-u) + x10*(u-v) + x11*v 
+       - c1*(1-u)*(u-v) - c2*(u-v)*v - c3*(1-u)*v
+```
+
+其中 c1, c2, c3 是根据边方向和法向量计算的曲率系数。
+
+---
+
+## 3. visualize_nagata.py - Nagata曲面可视化工具
+
+### 功能
+- 读取NSM文件并计算Nagata曲面
+- 并排对比原始网格与Nagata曲面
+- 支持按面片ID着色
+
+### 依赖安装
+```bash
+pip install numpy pyvista
+```
+
+### 使用方法
+
+#### 基本用法
+```bash
+python visualize_nagata.py <nsm文件路径>
+```
+
+#### 命令行参数
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `-r, --resolution N` | Nagata采样密度 | 10 |
+| `--no-compare` | 不显示原始网格对比 | 显示对比 |
+| `--edges` | 显示网格边 | 不显示 |
+| `--color-by-id` | 按面片ID着色 | 否 |
+
+#### 示例
+```bash
+# 基本可视化（并排对比）
+python visualize_nagata.py ../models/nsm/Gear_I.nsm
+
+# 提高采样密度
+python visualize_nagata.py ../models/nsm/Gear_I.nsm -r 20
+
+# 单独显示Nagata曲面，按面片ID着色
+python visualize_nagata.py ../models/nsm/Gear_I.nsm --no-compare --color-by-id
+
+# 显示网格边线
+python visualize_nagata.py ../models/nsm/Gear_I.nsm --edges
+```
+
+### 交互操作
+- **左键拖动**: 旋转视角
+- **右键拖动**: 缩放
+- **中键拖动**: 平移
+- **滚轮**: 缩放
+- **'q'**: 退出
+
+---
+
+## 4. visualize_sdf.py - SDF零等值面可视化（Matplotlib/Plotly）
 
 ### 功能
 - 从SdfSampler生成的.raw文件加载SDF数据
@@ -146,7 +245,7 @@ python visualize_sdf.py approx_sdf.raw exact_sdf.raw -t "Approximate" "Exact"
 
 ---
 
-## 3. visualize_sdf_pyvista.py - SDF零等值面可视化（PyVista交互式）
+## 5. visualize_sdf_pyvista.py - SDF零等值面可视化（PyVista交互式）
 
 ### 功能
 - 使用PyVista进行高性能3D可视化
@@ -198,7 +297,7 @@ python visualize_sdf_pyvista.py gear_sampled.raw --volume --axis z
 
 ---
 
-## 4. visualize_sdf_pyvista_offscreen.py - SDF可视化（离屏渲染）
+## 6. visualize_sdf_pyvista_offscreen.py - SDF可视化（离屏渲染）
 
 ### 功能
 - 不打开交互窗口，直接生成静态图片
@@ -287,7 +386,9 @@ python visualize_sdf_pyvista_offscreen.py data.raw -o output.png
 
 ## 更新日志
 
+- **2026-02-02**: 添加 `nagata_patch.py`, `visualize_nagata.py` - Nagata曲面插值计算与可视化
 - **2025-02-02**: 添加 `nsm_reader.py` - NSM网格可视化工具
 - **2025-02-01**: 添加 `visualize_sdf_pyvista_offscreen.py` - 离屏渲染版本
 - **2025-01-31**: 添加 `visualize_sdf_pyvista.py` - PyVista交互式可视化
 - **2025-01-30**: 添加 `visualize_sdf.py` - 基础SDF可视化工具
+
