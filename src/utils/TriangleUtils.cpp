@@ -1,4 +1,5 @@
 #include "SdfLib/utils/TriangleUtils.h"
+#include "SdfLib/utils/NagataPatch.h"
 
 namespace sdflib
 {
@@ -425,6 +426,36 @@ namespace TriangleUtils
         }
 
         return triangles;
+    }
+    
+    std::vector<NagataPatch::NagataPatchData> calculateMeshNagataPatchData(
+        const Mesh& mesh, 
+        const std::vector<TriangleData>& trianglesData)
+    {
+        const std::vector<glm::vec3>& vertices = mesh.getVertices();
+        const std::vector<uint32_t> indices = mesh.getIndices();
+        
+        std::vector<NagataPatch::NagataPatchData> nagataPatches;
+        nagataPatches.reserve(indices.size() / 3);
+        
+        for (int i = 0, tIndex = 0; i < indices.size(); i += 3, tIndex++)
+        {
+            const glm::vec3& v0 = vertices[indices[i]];
+            const glm::vec3& v1 = vertices[indices[i + 1]];
+            const glm::vec3& v2 = vertices[indices[i + 2]];
+            
+            // 从三角形数据中获取法向量（已经变换到世界坐标系）
+            // verticesNormal存储在三角形局部坐标系中，需要变换回世界坐标系
+            glm::mat3 invTransform = glm::inverse(trianglesData[tIndex].transform);
+            glm::vec3 n0 = glm::normalize(invTransform * trianglesData[tIndex].verticesNormal[0]);
+            glm::vec3 n1 = glm::normalize(invTransform * trianglesData[tIndex].verticesNormal[1]);
+            glm::vec3 n2 = glm::normalize(invTransform * trianglesData[tIndex].verticesNormal[2]);
+            
+            // 创建Nagata曲面数据
+            nagataPatches.emplace_back(v0, v1, v2, n0, n1, n2);
+        }
+        
+        return nagataPatches;
     }
 }
 }

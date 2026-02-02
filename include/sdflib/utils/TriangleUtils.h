@@ -12,6 +12,7 @@
 #include <cereal/types/array.hpp>
 #include "Mesh.h"
 #include "UsefullSerializations.h"
+#include "NagataPatch.h"
 
 namespace sdflib
 {
@@ -72,6 +73,19 @@ namespace TriangleUtils
     };
 
     std::vector<TriangleData> calculateMeshTriangleData(const Mesh& mesh);
+    
+    /**
+     * @brief 计算网格的Nagata曲面数据
+     * 
+     * 为每个三角形计算Nagata曲率系数，用于高阶曲面插值
+     * 
+     * @param mesh 输入网格
+     * @param trianglesData 三角形数据（包含法向量信息）
+     * @return std::vector<NagataPatch::NagataPatchData> Nagata曲面数据数组
+     */
+    std::vector<NagataPatch::NagataPatchData> calculateMeshNagataPatchData(
+        const Mesh& mesh, 
+        const std::vector<TriangleData>& trianglesData);
 
     inline float getSqDistPointAndTriangle(glm::vec3 point, const TriangleData& data)
     {
