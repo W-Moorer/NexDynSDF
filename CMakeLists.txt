@@ -115,6 +115,10 @@ add_executable(test_all tests/test_all.cpp)
 target_link_libraries(test_all PRIVATE sdflib)
 add_test(NAME all_test COMMAND test_all)
 
+add_executable(test_nagata_enhanced tests/test_nagata_enhanced.cpp)
+target_link_libraries(test_nagata_enhanced PRIVATE sdflib)
+add_test(NAME nagata_enhanced_test COMMAND test_nagata_enhanced)
+
 # Output configuration info
 message(STATUS "========================================")
 message(STATUS "NexDynSDF Project Configuration Complete")

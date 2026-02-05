@@ -12,6 +12,8 @@ namespace sdflib
 {
 namespace NagataPatch
 {
+    // Forward declaration
+    inline glm::vec3 computeCurvature(glm::vec3 d, glm::vec3 n0, glm::vec3 n1);
     /**
      * @brief Nagata曲面三角形数据结构
      * 
@@ -67,7 +69,8 @@ namespace NagataPatch
     inline glm::vec3 computeCurvature(glm::vec3 d, glm::vec3 n0, glm::vec3 n1)
     {
         // 角度容差：当法向量夹角小于0.1度时，认为是平行的
-        const float angleTol = std::cos(0.1f * M_PI / 180.0f);
+        // cos(0.1 deg) ≈ 0.9999984769
+        static const float angleTol = 0.9999984769f;
         
         // 计算中间变量
         glm::vec3 v = 0.5f * (n0 + n1);

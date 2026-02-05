@@ -212,6 +212,120 @@ namespace MeshBinaryLoader
         
         return nagataPatches;
     }
+    
+    /**
+     * @brief 从 NSM 文件加载网格数据
+     * 
+     * NSM 文件格式:
+     *     - 64字节 文件头:
+     *         - 4字节: Magic "NSM\0"
+     *         - 4字节: Version (uint32)
+     *         - 4字节: NumVertices (uint32)
+     *         - 4字节: NumTriangles (uint32)
+     *         - 48字节: Reserved
+     *     - N*24字节: 顶点坐标 (double * 3 * N)
+     *     - M*12字节: 三角形索引 (uint32 * 3 * M)
+     *     - M*4字节: 面片 ID (uint32 * M)
+     *     - M*72字节: 顶点法向量 (double * 3 * 3 * M)
+     */
+    inline MeshData loadFromNSM(const std::string& filepath)
+    {
+        MeshData meshData;
+        
+        std::ifstream file(filepath, std::ios::binary);
+        if (!file.is_open())
+        {
+            std::cerr << "MeshBinaryLoader: 无法打开 NSM 文件 " << filepath << std::endl;
+            return meshData;
+        }
+        
+        // 读取文件头 (64 bytes)
+        char header[64];
+        file.read(header, 64);
+        if (!file)
+        {
+            std::cerr << "MeshBinaryLoader: NSM 文件头不完整" << std::endl;
+            return meshData;
+        }
+        
+        // 验证 magic
+        if (header[0] != 'N' || header[1] != 'S' || header[2] != 'M' || header[3] != '\0')
+        {
+            std::cerr << "MeshBinaryLoader: 无效的 NSM magic" << std::endl;
+            return meshData;
+        }
+        
+        // 解析头部
+        uint32_t version = *reinterpret_cast<uint32_t*>(header + 4);
+        uint32_t numVertices = *reinterpret_cast<uint32_t*>(header + 8);
+        uint32_t numTriangles = *reinterpret_cast<uint32_t*>(header + 12);
+        
+        if (version != 1)
+        {
+            std::cerr << "MeshBinaryLoader: 不支持的 NSM 版本 " << version << std::endl;
+            return meshData;
+        }
+        
+        // 分配内存
+        meshData.vertices.resize(numVertices);
+        meshData.faces.resize(numTriangles);
+        meshData.faceNormals.resize(numTriangles);
+        
+        // 读取顶点坐标 (double)
+        for (uint32_t i = 0; i < numVertices; ++i)
+        {
+            double x, y, z;
+            file.read(reinterpret_cast<char*>(&x), sizeof(double));
+            file.read(reinterpret_cast<char*>(&y), sizeof(double));
+            file.read(reinterpret_cast<char*>(&z), sizeof(double));
+            meshData.vertices[i] = glm::vec3(static_cast<float>(x), 
+                                              static_cast<float>(y), 
+                                              static_cast<float>(z));
+        }
+        
+        // 读取三角形索引
+        for (uint32_t i = 0; i < numTriangles; ++i)
+        {
+            uint32_t i0, i1, i2;
+            file.read(reinterpret_cast<char*>(&i0), sizeof(uint32_t));
+            file.read(reinterpret_cast<char*>(&i1), sizeof(uint32_t));
+            file.read(reinterpret_cast<char*>(&i2), sizeof(uint32_t));
+            meshData.faces[i] = {i0, i1, i2};
+        }
+        
+        // 跳过面片 ID
+        file.seekg(numTriangles * sizeof(uint32_t), std::ios::cur);
+        
+        // 读取顶点法向量 (double)
+        for (uint32_t i = 0; i < numTriangles; ++i)
+        {
+            for (int j = 0; j < 3; ++j)
+            {
+                double nx, ny, nz;
+                file.read(reinterpret_cast<char*>(&nx), sizeof(double));
+                file.read(reinterpret_cast<char*>(&ny), sizeof(double));
+                file.read(reinterpret_cast<char*>(&nz), sizeof(double));
+                meshData.faceNormals[i][j] = glm::vec3(static_cast<float>(nx),
+                                                        static_cast<float>(ny),
+                                                        static_cast<float>(nz));
+            }
+        }
+        
+        if (!file)
+        {
+            std::cerr << "MeshBinaryLoader: NSM 数据读取失败" << std::endl;
+            meshData.vertices.clear();
+            meshData.faces.clear();
+            meshData.faceNormals.clear();
+            return meshData;
+        }
+        
+        std::cout << "MeshBinaryLoader: 成功加载 NSM 文件 " << filepath << std::endl;
+        std::cout << "  顶点数: " << numVertices << std::endl;
+        std::cout << "  三角形数: " << numTriangles << std::endl;
+        
+        return meshData;
+    }
 }
 }
 
