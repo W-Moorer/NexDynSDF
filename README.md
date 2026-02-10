@@ -2,7 +2,7 @@
 
 > 本项目基于 [SdfLib](https://github.com/UPC-ViRVIG/SdfLib) 进行开发，感谢 UPC-ViRVIG 团队提供的优秀开源实现。
 
-NexDynSDF 是一个高性能的有符号距离场（Signed Distance Field, SDF）计算库，支持从三角网格（OBJ/VTP格式）生成自适应八叉树SDF和精确八叉树SDF。
+NexDynSDF 是一个高性能的有符号距离场（Signed Distance Field, SDF）计算库，支持从三角网格（OBJ/VTP/NSM格式）生成自适应八叉树SDF、精确八叉树SDF和混合八叉树SDF。
 
 ## 功能特性
 
@@ -34,9 +34,20 @@ NexDynSDF 是一个高性能的有符号距离场（Signed Distance Field, SDF�
 - **快速剔除**：基于包围盒和GJK距离计算的三角形筛选
 - **精确查询**：使用 TriangleMeshDistance 库进行精确距离计算
 
+### 混合八叉树SDF (HybridOctreeSdf)
+**核心思想**：构建阶段使用 Nagata Patch 计算更平滑的顶点值，查询阶段保持八叉树的快速检索。
+
+- **优势**：
+  - 构建时保留尖锐特征，同时提升曲面光滑性。
+  - 查询速度接近标准 OctreeSdf。
+- **数据依赖**：
+  - 需要 `EnhancedNagataData`（由工具自动计算并缓存为 `.eng` 文件）。
+  - 推荐输入 `.nsm` 以利用面法向信息。
+
 ### 支持的输入格式
-- OBJ 三角网格文件
-- VTP (VTK PolyData) 文件
+- **OBJ**：Wavefront OBJ 三角网格文件
+- **VTP**：VTK XML PolyData 格式文件
+- **NSM**：NexDyn Surface Mesh 二进制格式（支持每面片法线信息）
 
 ### 输出格式
 - 二进制序列化格式（使用 Cereal 库），支持快速加载
@@ -50,47 +61,96 @@ NexDynSDF 是一个高性能的有符号距离场（Signed Distance Field, SDF�
 
 ```
 NexDynSDF/
-├── CMakeLists.txt          # CMake 构建配置
-├── vcpkg.json              # vcpkg 依赖清单
+├── CMakeLists.txt              # CMake 构建配置
+├── vcpkg.json                  # vcpkg 依赖清单
+├── LICENSE                     # 许可证文件
+├── .gitignore                  # Git 忽略配置
 ├── include/
 │   └── sdflib/
-│       ├── SdfFunction.h           # SDF 基类
-│       ├── OctreeSdf.h             # 自适应八叉树SDF
-│       ├── ExactOctreeSdf.h        # 精确八叉树SDF
-│       ├── InterpolationMethods.h  # 插值方法（三线性/三三次）
-│       ├── OctreeSdfUtils.h        # 误差估计函数
-│       ├── TrianglesInfluence.h    # 三角形影响区域计算
-│       ├── OctreeSdfBreadthFirst.h # BFS构建+连续性
-│       ├── OctreeSdfDepthFirst.h   # DFS构建
-│       ├── TriangleMeshDistance.h  # ICG 距离查询库
+│       ├── SdfFunction.h               # SDF 基类
+│       ├── OctreeSdf.h                 # 自适应八叉树SDF
+│       ├── ExactOctreeSdf.h            # 精确八叉树SDF
+│       ├── ExactOctreeSdfDepthFirst.h  # 精确八叉树DFS构建
+│       ├── HybridOctreeSdf.h           # 混合八叉树SDF
+│       ├── NagataTrianglesInfluenceForBuild.h # 混合构建用影响区域策略
+│       ├── TriangleMeshDistance.h      # ICG 精确距离查询库
+│       ├── TrianglesInfluence.h        # 三角形影响区域计算
+│       ├── InterpolationMethods.h      # 插值方法（三线性/三三次）
+│       ├── OctreeSdfUtils.h            # 误差估计函数
+│       ├── OctreeSdfBreadthFirst.h     # BFS构建+连续性
+│       ├── OctreeSdfBreadthFirstNoDelay.h # BFS构建（无延迟版本）
+│       ├── OctreeSdfDepthFirst.h       # DFS构建
 │       └── utils/
-│           ├── Mesh.h              # 网格加载工具
-│           ├── TriangleUtils.h     # 三角形工具
-│           ├── GJK.h               # GJK算法
-│           ├── BoundingBox.h       # 包围盒工具
-│           └── Timer.h             # 计时器工具
+│           ├── Mesh.h                  # 网格加载工具（OBJ/VTP）
+│           ├── MeshBinaryLoader.h      # NSM 二进制格式加载工具
+│           ├── NagataEnhanced.h        # Nagata 裂隙边增强及几何查询
+│           ├── NagataPatch.h           # 基础 Nagata Patch 数据结构
+│           ├── InterpolationMethods.h  # 插值方法工具
+│           ├── TriangleUtils.h         # 三角形工具
+│           ├── GJK.h                   # GJK算法头文件
+│           ├── GJK.inl                 # GJK算法内联实现
+│           ├── BoundingBox.h           # 包围盒工具
+│           ├── Timer.h                 # 计时器工具
+│           └── UsefullSerializations.h # 序列化辅助工具
 ├── src/
-│   ├── SdfFunction.cpp
-│   ├── OctreeSdf.cpp
-│   ├── OctreeSdfUniform.cpp
-│   ├── ExactOctreeSdf.cpp
+│   ├── SdfFunction.cpp         # SDF基类实现
+│   ├── OctreeSdf.cpp           # 八叉树SDF实现
+│   ├── OctreeSdfUniform.cpp    # 均匀八叉树实现
+│   ├── ExactOctreeSdf.cpp      # 精确八叉树SDF实现
+│   ├── main.cpp                # 主程序入口（示例）
+│   ├── OctreeSdfBreadthFirst.h      # BFS构建内部实现
+│   ├── OctreeSdfBreadthFirstNoDelay.h # BFS无延迟构建内部实现
+│   ├── OctreeSdfDepthFirst.h   # DFS构建内部实现
 │   └── utils/
-│       ├── Mesh.cpp
-│       ├── TriangleUtils.cpp
-│       ├── GJK.cpp
-│       └── Timer.cpp
+│       ├── Mesh.cpp            # 网格加载实现
+│       ├── TriangleUtils.cpp   # 三角形工具实现
+│       ├── GJK.cpp             # GJK算法实现
+│       └── Timer.cpp           # 计时器实现
 ├── tools/
 │   ├── SdfExporter/
-│   │   └── main.cpp        # SDF导出工具主程序
+│   │   └── main.cpp            # SDF导出工具主程序
 │   └── SdfSampler/
-│       └── main.cpp        # SDF空间采样工具主程序
+│       └── main.cpp            # SDF空间采样工具主程序
 ├── pytools/
-│   ├── visualize_sdf.py              # Matplotlib/Plotly可视化脚本
-│   ├── visualize_sdf_pyvista.py      # PyVista交互式可视化脚本
+│   ├── README.md                       # Python工具文档
+│   ├── nsm_reader.py                   # NSM网格读取与可视化
+│   ├── nagata_patch.py                 # Nagata曲面插值计算模块
+│   ├── nagata_storage.py               # Nagata数据存储工具
+│   ├── check_nagata_cracks.py          # Nagata裂缝检测工具
+│   ├── visualize_nagata.py             # Nagata曲面可视化
+│   ├── visualize_obj_nagata.py         # OBJ文件Nagata可视化
+│   ├── visualize_sdf.py                # Matplotlib/Plotly可视化脚本
+│   ├── visualize_sdf_pyvista.py        # PyVista交互式可视化脚本
 │   └── visualize_sdf_pyvista_offscreen.py  # PyVista离屏渲染脚本
 ├── tests/
-│   └── test_all.cpp        # 单元测试
-└── third_party/            # FetchContent 缓存目录
+│   ├── test_all.cpp            # 综合单元测试
+│   ├── test_hybrid_accuracy.cpp # 混合SDF精度测试
+│   ├── test_openmp.cpp         # OpenMP测试
+│   ├── test_spdlog.cpp         # spdlog日志测试
+│   ├── test_icg.cpp            # ICG距离查询测试
+│   ├── test_fcpw.cpp           # FCPW库测试
+│   ├── test_enoki.cpp          # Enoki向量化测试
+│   ├── test_eigen.cpp          # Eigen矩阵库测试
+│   ├── test_cereal.cpp         # Cereal序列化测试
+│   └── test_glm.cpp            # GLM数学库测试
+├── demos/
+│   ├── extract_junction_nsm.py      # 连接处提取演示
+│   ├── extract_two_faces_nsm.py     # 双面提取演示
+│   └── generate_cone_nsm.py         # 圆锥生成演示
+├── models/
+│   ├── nsm/                    # NSM格式模型
+│   │   ├── Gear_I.nsm
+│   │   ├── Gear_I.eng          # 对应的增强数据
+│   │   ├── Gear_II.nsm
+│   │   └── Gear_II.eng
+│   └── vtp/                    # VTP格式模型
+│       ├── complex_geometry/   # 复杂几何体
+│       ├── nonsmooth_geometry/ # 非光滑几何体
+│       ├── smooth_geometry/    # 光滑几何体
+│       └── smooth_geometry_check/ # 光滑几何体验证
+└── third_party/                # FetchContent 缓存目录
+    ├── enoki_lib-src/          # Enoki向量化库
+    └── fcpw_lib-src/           # FCPW最近点查询库
 ```
 
 ## 依赖项
@@ -100,7 +160,7 @@ NexDynSDF/
 - CMake >= 3.20
 - C++17 兼容编译器
 - OpenMP
-- vcpkg (安装在 `C:/vcpkg`)
+- vcpkg (建议安装在 `C:/vcpkg`)
 - Git
 
 ### 库依赖
@@ -224,24 +284,32 @@ cmake --build . --config Release
 
 ### SdfExporter 工具
 
-将三角网格（OBJ/VTP）转换为SDF二进制文件。
+将三角网格（OBJ/VTP/NSM）转换为SDF二进制文件。
 
 **位置**: `build/Release/SdfExporter.exe`
 
 **用法**:
 
 ```
-SdfExporter <input.vtp> <output.bin> [options]
+SdfExporter <input> <output.bin> [options]
+
+参数:
+  <input>               输入网格文件 (.obj, .vtp, .nsm)
+  <output.bin>          输出SDF二进制文件
 
 Options:
   --depth <n>              八叉树深度 (默认: 8)
   --start_depth <n>        起始深度 (默认: 1)
   --algorithm <type>       算法: continuity, no_continuity, uniform (默认: continuity)
-  --sdf_format <format>    SDF格式: octree, exact_octree (默认: octree)
+  --sdf_format <format>    SDF格式: octree, exact_octree, hybrid (默认: octree)
   --termination <threshold> 终止阈值 (默认: 1e-3)
   --num_threads <n>        线程数 (默认: 1)
   --help                   显示帮助信息
 ```
+
+> **注意**: 使用 `hybrid` 格式时：
+> 1. 仅支持 `.nsm` 输入。
+> 2. 程序会自动计算或加载 `.eng` (Enhanced Data) 缓存文件。
 
 ### SdfSampler 工具
 
@@ -301,6 +369,9 @@ def load_raw_sdf(filepath):
 # 生成精确八叉树SDF
 .\SdfExporter models/obj/bunny.obj output/bunny_exact.bin --sdf_format exact_octree --depth 8
 
+# 生成 混合 SDF（推荐用于需要平滑但保留特征的模型）
+.\SdfExporter models/nsm/Gear_I.nsm output/gear_hybrid.bin --sdf_format hybrid --depth 8
+
 # 使用多线程加速
 .\SdfExporter models/obj/bunny.obj output/bunny.bin --depth 8 --num_threads 8
 ```
@@ -349,7 +420,20 @@ python pytools/visualize_sdf.py output/bunny_sampled.raw
 python pytools/visualize_sdf.py approx.raw exact.raw --compare
 ```
 
-#### 4. 完整工作流程示例
+#### 4. NSM文件可视化
+
+```powershell
+# 可视化NSM网格及其法向量
+python pytools/nsm_reader.py models/nsm/Gear_I.nsm
+
+# 按面片ID着色
+python pytools/nsm_reader.py models/nsm/Gear_I.nsm --color-by-id
+
+# 调整法向量显示
+python pytools/nsm_reader.py models/nsm/Gear_I.nsm --normal-scale 0.005 --normal-skip 20
+```
+
+#### 5. 完整工作流程示例
 
 ```powershell
 # 步骤1: 从OBJ生成SDF
@@ -370,7 +454,7 @@ python pytools/visualize_sdf_pyvista_offscreen.py output/gear_sampled.raw -o out
 #include <sdflib/utils/Mesh.h>
 
 // 加载网格
-sdflib::Mesh mesh("path/to/model.obj");
+sdflib::Mesh mesh("path/to/model.vtp");
 
 // 获取包围盒并添加边距
 sdflib::BoundingBox box = mesh.getBoundingBox();
@@ -474,6 +558,14 @@ $$
 - 支持精确的有符号距离计算
 - 角度加权伪法线用于符号判定
 
+### 混合八叉树SDF (HybridOctreeSdf)
+
+构建阶段利用 Nagata Patch 计算更平滑的顶点值，查询阶段保留八叉树的快速检索：
+
+- 输入为 `.nsm` 时可直接利用面法向信息
+- 通过 `.eng` 文件缓存裂隙边增强数据
+- 构建与查询兼顾质量与性能
+
 ## 实现细节
 
 ### 插值方法切换
@@ -516,6 +608,33 @@ OctreeSdf sdf(mesh, box, depth, startDepth,
     /*numThreads=*/8);  // 使用8线程
 ```
 
+## 测试
+
+```powershell
+cd build
+ctest --output-on-failure
+```
+
+或直接运行测试程序：
+
+```powershell
+# 综合测试
+.\Release\test_all.exe
+
+# 混合SDF测试
+.\Release\test_hybrid_accuracy.exe
+
+# 依赖库测试
+.\Release\test_glm.exe
+.\Release\test_eigen.exe
+.\Release\test_cereal.exe
+.\Release\test_spdlog.exe
+.\Release\test_enoki.exe
+.\Release\test_fcpw.exe
+.\Release\test_icg.exe
+.\Release\test_openmp.exe
+```
+
 ## 常见问题
 
 ### 1. vcpkg 依赖下载慢
@@ -544,18 +663,11 @@ cmake .. -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmak
 
 三三次插值每个叶子节点存储64个float（256字节），比三线性的8个float（32字节）大8倍。对于内存敏感的应用，可切换为三线性插值。
 
-## 测试
+### 5. Hybrid SDF 构建失败
 
-```powershell
-cd build
-ctest --output-on-configuration
-```
-
-或直接运行测试程序：
-
-```powershell
-.\Release\test_all.exe
-```
+- 确保输入文件存在且格式正确
+- 检查是否有写权限生成 `.eng` 缓存文件
+- Hybrid 仅支持 NSM 输入
 
 ## 参考文献
 
@@ -571,10 +683,17 @@ ctest --output-on-configuration
 4. **TriangleMeshDistance**:
    - José Antonio Fernández Fernández, *"Triangle Mesh Distance"* (MIT License)
 
+5. **Nagata Patch**:
+   - Nagata, *"Local Interpolation for Curve and Surface Construction"*, 2005
+
 ## 许可证
 
 本项目基于参考项目迁移开发，遵循原始代码的许可证条款。
 
 ## 致谢
 
-本项目基于 [SdfLib](https://github.com/UPC-ViRVIG/SdfLib) 项目进行开发，感谢 UPC-ViRVIG 团队提供的优秀开源实现。NexDynSDF 在 SdfLib 的基础上进行了改进和扩展。
+本项目基于 [SdfLib](https://github.com/UPC-ViRVIG/SdfLib) 项目进行开发，感谢 UPC-ViRVIG 团队提供的优秀开源实现。NexDynSDF 在 SdfLib 的基础上进行了改进和扩展，包括：
+- 混合SDF构建支持
+- NSM二进制格式支持
+- 裂隙边处理
+- 更多可视化工具

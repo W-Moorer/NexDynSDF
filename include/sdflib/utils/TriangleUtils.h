@@ -75,13 +75,13 @@ namespace TriangleUtils
     std::vector<TriangleData> calculateMeshTriangleData(const Mesh& mesh);
     
     /**
-     * @brief 计算网格的Nagata曲面数据
+     * @brief Calculate Nagata surface data for the mesh
      * 
-     * 为每个三角形计算Nagata曲率系数，用于高阶曲面插值
+     * Computes Nagata curvature coefficients for each triangle, used for higher-order surface interpolation.
      * 
-     * @param mesh 输入网格
-     * @param trianglesData 三角形数据（包含法向量信息）
-     * @return std::vector<NagataPatch::NagataPatchData> Nagata曲面数据数组
+     * @param mesh Input mesh
+     * @param trianglesData Triangle data (including normal information)
+     * @return std::vector<NagataPatch::NagataPatchData> Array of Nagata patch data
      */
     std::vector<NagataPatch::NagataPatchData> calculateMeshNagataPatchData(
         const Mesh& mesh, 

@@ -508,6 +508,596 @@ def sample_nagata_triangle_with_crease(
 
 
 
+
+# =============================================================================
+# 投影与查询逻辑 (Projection & Query)
+# =============================================================================
+
+def smoothstep_deriv(t: np.ndarray) -> np.ndarray:
+    """五次光滑过渡函数的导数: w'(t) = 30t^2(t-1)^2"""
+    t = np.clip(t, 0, 1)
+    term = t * (t - 1.0)
+    return 30.0 * term * term
+
+def evaluate_nagata_derivatives(
+    x00: np.ndarray, x10: np.ndarray, x11: np.ndarray,
+    c1: np.ndarray, c2: np.ndarray, c3: np.ndarray,
+    u: float, v: float,
+    # 可选: 折痕相关参数
+    is_crease: tuple = (False, False, False),
+    c_sharps: tuple = (None, None, None), 
+    d0: float = 0.1
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    计算 Nagata 曲面的一阶偏导数 (dX/du, dX/dv)
+    支持折痕融合逻辑
+    """
+    # 基础几何导数 (线性部分)
+    # x(u,v)_linear = x00(1-u) + x10(u-v) + x11*v
+    # dLin/du = -x00 + x10
+    # dLin/dv = -x10 + x11
+    dLin_du = -x00 + x10
+    dLin_dv = -x10 + x11
+    
+    # 二次项系数混合处理
+    # 距离参数定义
+    d_params = [v, 1.0 - u, u - v] # d1(v), d2(1-u), d3(u-v)
+    
+    # 距离对 (u,v) 的导数 [dd/du, dd/dv]
+    dd_du = [0.0, -1.0, 1.0]
+    dd_dv = [1.0, 0.0, -1.0]
+    
+    # 准备系数及其导数
+    coeffs = [c1, c2, c3]
+    # Handle None in c_sharps
+    sharp_coeffs = [c if s is None else s for c, s in zip(coeffs, c_sharps)]
+    
+    c_eff = []
+    dc_du = []
+    dc_dv = []
+    
+    for i in range(3):
+        if not is_crease[i]:
+            c_eff.append(coeffs[i])
+            dc_du.append(np.zeros(3))
+            dc_dv.append(np.zeros(3))
+        else:
+            dist = d_params[i]
+            c_orig = coeffs[i]
+            c_sharp = sharp_coeffs[i]
+            
+            if dist <= 0:
+                c_eff.append(c_sharp)
+                dc_du.append(np.zeros(3))
+                dc_dv.append(np.zeros(3))
+            elif dist >= d0:
+                c_eff.append(c_orig)
+                dc_du.append(np.zeros(3))
+                dc_dv.append(np.zeros(3))
+            else:
+                s = dist / d0
+                w = smoothstep(s)
+                dw_ds = smoothstep_deriv(s)
+                
+                # c_eff = (1-w)c_sharp + w*c_orig
+                #       = c_sharp + w(c_orig - c_sharp)
+                diff = c_orig - c_sharp
+                c_val = c_sharp + w * diff
+                c_eff.append(c_val)
+                
+                # Chain rule
+                # dc/du = dc/dw * dw/ds * ds/dd * dd/du
+                factor = diff * dw_ds * (1.0 / d0)
+                dc_du.append(factor * dd_du[i])
+                dc_dv.append(factor * dd_dv[i])
+    
+    # 二次基函数及其导数
+    # b1 = (1-u)(u-v)
+    b1 = (1.0 - u) * (u - v)
+    db1_du = 1.0 - 2.0 * u + v
+    db1_dv = u - 1.0
+    
+    # b2 = (u-v)v
+    b2 = (u - v) * v
+    db2_du = v
+    db2_dv = u - 2.0 * v
+    
+    # b3 = (1-u)v
+    b3 = (1.0 - u) * v
+    db3_du = -v
+    db3_dv = 1.0 - u
+    
+    bases = [b1, b2, b3]
+    db_du_list = [db1_du, db2_du, db3_du]
+    db_dv_list = [db1_dv, db2_dv, db3_dv]
+    
+    dQ_du = np.zeros(3)
+    dQ_dv = np.zeros(3)
+    
+    for i in range(3):
+        # term i: C_i * B_i
+        # d/du = dC/du * B + C * dB/du
+        term_du = dc_du[i] * bases[i] + c_eff[i] * db_du_list[i]
+        term_dv = dc_dv[i] * bases[i] + c_eff[i] * db_dv_list[i]
+        
+        dQ_du += term_du
+        dQ_dv += term_dv
+        
+    dXdu = dLin_du - dQ_du
+    dXdv = dLin_dv - dQ_dv
+    
+    return dXdu, dXdv
+
+def find_nearest_point_on_patch(
+    point: np.ndarray,
+    x00: np.ndarray, x10: np.ndarray, x11: np.ndarray,
+    c1: np.ndarray, c2: np.ndarray, c3: np.ndarray,
+    is_crease: tuple = (False, False, False),
+    c_sharps: tuple = (None, None, None),
+    d0: float = 0.1,
+    max_iter: int = 15
+) -> Tuple[np.ndarray, float, float, float]:
+    """
+    使用 Newton-Raphson 算法寻找单个 Patch 上的最近点
+    (Robust Version: Multiple Restarts)
+    Returns: (nearest_point, distance, u, v)
+    """
+    # 候选初始点列表 (u, v)
+    # 包含: 
+    # 1. 简单平面投影 (Primary Guess)
+    # 2. 面片中心 (重心的Nagata参数大致也在中心附近, 选 u=0.66, v=0.33)
+    # 3. 顶点 (0,0), (1,0), (1,1)
+    # 4. 边中点 (0.5, 0), (1, 0.5), (0.5, 0.5)
+    
+    candidates = [
+        (0.666, 0.333), # 重心 approximation
+        (0.0, 0.0),     # x00
+        (1.0, 0.0),     # x10
+        (1.0, 1.0),     # x11
+        (0.5, 0.0),     # Edge 1 mid
+        (1.0, 0.5),     # Edge 2 mid
+        (0.5, 0.5)      # Edge 3 mid
+    ]
+
+    # 添加平面投影作为候选 (优先级最高)
+    edge1 = x10 - x00
+    edge2 = x11 - x00
+    normal = np.cross(edge1, edge2)
+    area_sq = np.dot(normal, normal)
+    
+    if area_sq > 1e-12:
+        w = point - x00
+        s = np.dot(np.cross(w, edge2), normal) / area_sq
+        t = np.dot(np.cross(edge1, w), normal) / area_sq
+        
+        # Mapping to u,v assuming linear transform structure approximations
+        # u ~ s+t, v ~ t ? 
+        # Ideally, we should invert the linear basis x00(1-u) + x10(u-v) + x11v
+        # = x00 + u(x10-x00) + v(x11-x10)
+        # s corresponds directly to u coeff? t corresponds to v coeff? 
+        # No, edge1 = x10-x00, edge2 = x11-x00 (standard)
+        # Ours linear: x00 + u*edge1 + v*(x11-x10)
+        # x11-x10 = (x11-x00) - (x10-x00) = edge2 - edge1
+        # P = x00 + u*edge1 + v*(edge2 - edge1)
+        #   = x00 + (u-v)*edge1 + v*edge2
+        # So s = u-v, t = v
+        # => v = t
+        # => u = s + v = s + t
+        
+        u_proj = np.clip(s + t, 0.0, 1.0)
+        v_proj = np.clip(t, 0.0, u_proj)
+        candidates.insert(0, (u_proj, v_proj))
+
+    # 挑选最接近的顶点作为参考 (Heuristic)
+    d00 = np.sum((point - x00)**2)
+    d10 = np.sum((point - x10)**2)
+    d11 = np.sum((point - x11)**2)
+    if d00 <= d10 and d00 <= d11:
+        candidates.insert(1, (0.01, 0.0))
+    elif d10 <= d00 and d10 <= d11:
+        candidates.insert(1, (0.99, 0.0))
+    else:
+        candidates.insert(1, (0.99, 0.99))
+
+    # 去重
+    unique_candidates = []
+    seen = set()
+    for c in candidates:
+        key = (round(c[0], 2), round(c[1], 2))
+        if key not in seen:
+            seen.add(key)
+            unique_candidates.append(c)
+    
+    best_dist_sq = float('inf')
+    best_res = (x00.copy(), float('inf'), 0.0, 0.0)
+
+    # 对每个候选起点运行优化
+    for start_u, start_v in unique_candidates:
+        u, v = start_u, start_v
+        
+        # Optimization Loop
+        for _ in range(max_iter):
+            # Clamping
+            u = np.clip(u, 0.0, 1.0)
+            v = np.clip(v, 0.0, u)
+            
+            u_arr, v_arr = np.array([u]), np.array([v])
+            
+            # Eval
+            if any(is_crease):
+                P_surf = evaluate_nagata_patch_with_crease(
+                    x00, x10, x11, c1, c2, c3, 
+                    c_sharps[0], c_sharps[1], c_sharps[2],
+                    is_crease, u_arr, v_arr, d0
+                ).flatten()
+                dXdu, dXdv = evaluate_nagata_derivatives(
+                    x00, x10, x11, c1, c2, c3, u, v,
+                    is_crease, c_sharps, d0
+                )
+            else:
+                P_surf = evaluate_nagata_patch(
+                    x00, x10, x11, c1, c2, c3, u_arr, v_arr
+                ).flatten()
+                dXdu, dXdv = evaluate_nagata_derivatives(
+                    x00, x10, x11, c1, c2, c3, u, v
+                )
+            
+            diff = P_surf - point
+            
+            # Gradient
+            F_u = np.dot(diff, dXdu)
+            F_v = np.dot(diff, dXdv)
+            
+            # Hessian
+            H_uu = np.dot(dXdu, dXdu)
+            H_uv = np.dot(dXdu, dXdv)
+            H_vv = np.dot(dXdv, dXdv)
+            
+            det = H_uu * H_vv - H_uv * H_uv
+            if abs(det) < 1e-9:
+                # Hessian invalid, verify gradient descent
+                du = -F_u * 0.1 
+                dv = -F_v * 0.1
+            else:
+                inv_det = 1.0 / det
+                du = (H_vv * (-F_u) - H_uv * (-F_v)) * inv_det
+                dv = (-H_uv * (-F_u) + H_uu * (-F_v)) * inv_det
+                
+            # Step Limiting
+            step_len = np.sqrt(du*du + dv*dv)
+            if step_len > 0.3:
+                scale = 0.3 / step_len
+                du *= scale
+                dv *= scale
+
+            u_new = u + du
+            v_new = v + dv
+            
+            # Simple Domain Wall
+            if v_new < 0: v_new = 0
+            if u_new > 1: u_new = 1
+            if u_new < 0: u_new = 0
+            if v_new > u_new: v_new = u_new 
+                
+            change = abs(u_new - u) + abs(v_new - v)
+            u, v = u_new, v_new
+            
+            if change < 1e-6:
+                break
+                
+        # Final Eval for this candidate
+        u = np.clip(u, 0.0, 1.0)
+        v = np.clip(v, 0.0, u)
+        
+        if any(is_crease):
+             P_final = evaluate_nagata_patch_with_crease(
+                x00, x10, x11, c1, c2, c3, c_sharps[0], c_sharps[1], c_sharps[2], is_crease, np.array([u]), np.array([v]), d0
+            ).flatten()
+        else:
+            P_final = evaluate_nagata_patch(x00, x10, x11, c1, c2, c3, np.array([u]), np.array([v])).flatten()
+            
+        dist_sq = np.sum((P_final - point)**2)
+        if dist_sq < best_dist_sq:
+            best_dist_sq = dist_sq
+            best_res = (P_final, np.sqrt(dist_sq), u, v)
+
+    return best_res
+
+
+class NagataModelQuery:
+    """
+    提供对整个 NSM 模型的最近点查询功能
+    (Enhanced: 支持折痕自动检测与 c_sharp 修复)
+    """
+    def __init__(self, vertices: np.ndarray, triangles: np.ndarray, tri_vertex_normals: np.ndarray):
+        self.vertices = vertices
+        self.triangles = triangles
+        self.normals = tri_vertex_normals
+        
+        # Precompute individual patch data
+        self.patch_coeffs = [] # List[Tuple(c1, c2, c3)]
+        self.centroids = []
+        
+        print(f"初始化查询模型: {len(triangles)} 三角形...")
+        for i in range(len(triangles)):
+            idx = triangles[i]
+            x00=vertices[idx[0]]; x10=vertices[idx[1]]; x11=vertices[idx[2]]
+            n00=tri_vertex_normals[i,0]; n10=tri_vertex_normals[i,1]; n11=tri_vertex_normals[i,2]
+            
+            c1, c2, c3 = nagata_patch(x00, x10, x11, n00, n10, n11)
+            self.patch_coeffs.append((c1, c2, c3))
+            
+            # Approximate centroid
+            center = (x00 + x10 + x11) / 3.0
+            self.centroids.append(center)
+            
+        self.centroids = np.array(self.centroids)
+        
+        # Try to build KDTree
+        try:
+            from scipy.spatial import KDTree
+            self.kdtree = KDTree(self.centroids)
+            self.use_kdtree = True
+            print("KDTree 构建成功，加速开启。")
+        except ImportError:
+            self.use_kdtree = False
+            print("警告: 未找到 scipy.spatial.KDTree，将使用暴力搜索 (速度较慢)。")
+            
+        # =========================================================
+        # 折痕预计算 (Crease Precomputation)
+        # =========================================================
+        self.crease_map = {} # map edge_key -> c_sharp
+        
+        # 1. 构建边缘拓扑 edge -> list of (tri_idx, local_edge_idx)
+        print("正在构建边缘拓扑以检测折痕...")
+        edge_to_tris = {} # (min_v, max_v) -> list of tri_idx
+        
+        for t_idx in range(len(triangles)):
+            # Edge 1: 0-1
+            # Edge 2: 1-2
+            # Edge 3: 0-2 (注意 Nagata 定义的边序)
+            tri = triangles[t_idx]
+            edges = [
+                tuple(sorted((tri[0], tri[1]))),
+                tuple(sorted((tri[1], tri[2]))),
+                tuple(sorted((tri[0], tri[2])))
+            ]
+            
+            for e_key in edges:
+                if e_key not in edge_to_tris:
+                    edge_to_tris[e_key] = []
+                edge_to_tris[e_key].append(t_idx)
+                
+        # 2. 检测折痕并计算 c_sharp
+        crease_count = 0
+        sharpness_threshold = 0.9999 # cos(angle), > this means smooth
+        
+        for e_key, tri_indices in edge_to_tris.items():
+            if len(tri_indices) != 2:
+                continue # 边界边或非流形，暂时跳过修复
+                
+            t1 = tri_indices[0]
+            t2 = tri_indices[1]
+            
+            # 获取对应的顶点索引和法向量
+            def get_edge_data(t_idx, v_a, v_b):
+                tri = triangles[t_idx]
+                norms = tri_vertex_normals[t_idx]
+                
+                # Find local indices
+                try:
+                    idx_a = -1
+                    idx_b = -1
+                    for k in range(3):
+                        if tri[k] == v_a: idx_a = k
+                        if tri[k] == v_b: idx_b = k
+                    
+                    if idx_a == -1 or idx_b == -1: return None, None
+                        
+                    return norms[idx_a], norms[idx_b]
+                except:
+                    return None, None
+
+            vA, vB = e_key
+            nA_1, nB_1 = get_edge_data(t1, vA, vB)
+            nA_2, nB_2 = get_edge_data(t2, vA, vB)
+            
+            if nA_1 is None or nA_2 is None: continue
+            
+            # Check consistency
+            dot_A = np.dot(nA_1, nA_2)
+            dot_B = np.dot(nB_1, nB_2)
+            
+            # 如果任何一个端点的法向量不一致，视为折痕
+            if dot_A < sharpness_threshold or dot_B < sharpness_threshold:
+                # 是折痕，计算 c_sharp
+                posA = self.vertices[vA]
+                posB = self.vertices[vB]
+                edge_vec = posB - posA
+                
+                # 计算切向方向 d_A, d_B
+                d_A = compute_crease_direction(nA_1, nA_2, edge_vec)
+                d_B = compute_crease_direction(nB_1, nB_2, edge_vec)
+                
+                # 计算 c_sharp
+                c_sharp = compute_c_sharp(posA, posB, d_A, d_B)
+                
+                self.crease_map[e_key] = c_sharp
+                crease_count += 1
+                
+        if crease_count > 0:
+            print(f"检测到 {crease_count} 条折痕边，已启用 c_sharp 修复。")
+        else:
+            print("未检测到显著折痕，以完全光滑模式运行。")
+            
+    def _get_patch_crease_info(self, idx: int):
+        """Helper to get crease query params for a triangle"""
+        tri = self.triangles[idx]
+        # Edges order corresponding to c1, c2, c3:
+        # 1: v0-v1
+        # 2: v1-v2
+        # 3: v0-v2
+        
+        edges = [
+            tuple(sorted((tri[0], tri[1]))),
+            tuple(sorted((tri[1], tri[2]))),
+            tuple(sorted((tri[0], tri[2])))
+        ]
+        
+        is_crease = [False, False, False]
+        c_sharps = [None, None, None]
+        
+        for k in range(3):
+            if edges[k] in self.crease_map:
+                is_crease[k] = True
+                c_sharps[k] = self.crease_map[edges[k]]
+                
+        return tuple(is_crease), tuple(c_sharps)
+
+    def query(self, point: np.ndarray, k_nearest: int = 16) -> dict:
+        """
+        查询模型上距离 point 最近的点
+        (Enhanced: 支持多解处法向平滑/平均, 支持折痕修复)
+        """
+        candidate_indices = []
+        
+        if self.use_kdtree:
+            dists, indices = self.kdtree.query(point, k=min(k_nearest, len(self.centroids)))
+            if isinstance(indices, (int, np.integer)): indices = [indices]
+            candidate_indices = indices
+        else:
+            candidate_indices = range(len(self.centroids))
+            
+        # 1. 收集所有候选结果
+        candidates = []
+        min_dist = float('inf')
+        
+        for idx in candidate_indices:
+            idx = int(idx)
+            tri_v_idx = self.triangles[idx]
+            x00=self.vertices[tri_v_idx[0]]
+            x10=self.vertices[tri_v_idx[1]]
+            x11=self.vertices[tri_v_idx[2]]
+            c1, c2, c3 = self.patch_coeffs[idx]
+            
+            # 获取折痕信息
+            is_crease, c_sharps = self._get_patch_crease_info(idx)
+            
+            p_surf, dist, u, v = find_nearest_point_on_patch(
+                point, x00, x10, x11, c1, c2, c3,
+                is_crease=is_crease, c_sharps=c_sharps
+            )
+            
+            if dist < min_dist:
+                min_dist = dist
+            
+            # 计算法向备用
+            dXdu, dXdv = evaluate_nagata_derivatives(
+                x00, x10, x11, c1, c2, c3, u, v,
+                is_crease=is_crease, c_sharps=c_sharps
+            )
+            normal = np.cross(dXdu, dXdv)
+            norm_len = np.linalg.norm(normal)
+            if norm_len > 1e-12:
+                normal /= norm_len
+            else:
+                normal = np.array([0.,0.,1.])
+                
+            candidates.append({
+                'nearest_point': p_surf,
+                'distance': dist,
+                'normal': normal,
+                'triangle_index': idx,
+                'uv': (u,v)
+            })
+            
+        # 2. 筛选最优集合 (Tolerance for float errors)
+        epsilon = 1e-5 * (min_dist + 1.0) # Relative + Absolute
+        best_candidates = [c for c in candidates if c['distance'] <= min_dist + epsilon]
+        
+        if not best_candidates:
+            return None
+            
+        # 3. 融合结果 (Selector implementation)
+        # 核心逻辑: 平均所有"最近"候选者的梯度方向
+        # - 对于外部 Corner (Same point): geometry direction 是一致的 (P-q)，平均无影响 (除了数值噪点)
+        # - 对于内部 Medial Axis (Different points): geometry directions 不同，平均产生对称的角平分线 (Theory Section 5.2)
+        
+        avg_gradient = np.zeros(3)
+        mean_dist = 0.0
+        contributing_count = 0
+        
+        # 记录用于显示的元数据 (取第一个)
+        primary_res = best_candidates[0]
+        
+        for c in best_candidates:
+            p_surf = c['nearest_point']
+            surf_normal = c['normal']
+            dist = c['distance']
+            
+            # 计算该候选者的梯度方向 g_i
+            diff_vec = point - p_surf
+            dist_geo = np.linalg.norm(diff_vec)
+            
+            if dist_geo > 1e-6:
+                # 几何方向 (P - q) / d
+                g_i = diff_vec / dist_geo
+                
+                # 符号判断: SDF Gradient 永远指向"SDF值增加"的方向 (Outwards)
+                # Check alignment with surface normal
+                if np.dot(g_i, surf_normal) < 0:
+                     # P is Inside. P-q points "Inwards".
+                     # Gradient should point "Outwards" (-g_i).
+                     g_i = -g_i
+                else:
+                     # P is Outside. P-q points "Outwards".
+                     # Gradient = g_i
+                     pass
+            else:
+                # On surface: use surface normal
+                g_i = surf_normal
+            
+            avg_gradient += g_i
+            mean_dist += dist
+            contributing_count += 1
+            
+        if contributing_count > 0:
+            # 归一化平均梯度
+            norm_len = np.linalg.norm(avg_gradient)
+            if norm_len > 1e-12:
+                avg_gradient /= norm_len
+            else:
+                # Fallback (Theory Section 5.3): Maximum Inner Product or Parent
+                # 这里简单处理: 取第一个的梯度
+                avg_gradient = primary_res['normal'] # This is actually surf normal in raw data... 
+                # Recompute exact gradient for primary
+                diff = point - primary_res['nearest_point']
+                if np.linalg.norm(diff) > 1e-6:
+                    g0 = diff / np.linalg.norm(diff)
+                    if np.dot(g0, primary_res['normal']) < 0: g0 = -g0
+                    avg_gradient = g0
+                
+            mean_dist /= contributing_count
+            
+            # 更新结果
+            primary_res['normal'] = avg_gradient
+            primary_res['distance'] = mean_dist
+            
+            # Signed Distance (Re-evaluate sign based on final averaged gradient?)
+            # Usually sign is determined by the "Winner".
+            # If internal, sign is negative.
+            # But the 'query' function returns unsigned distance + normal.
+            # The calling script calculates signed distance.
+            # We should ensure consistence. Use dot(P-q, N_final)?
+            # No, `query` returns 'distance' (unsigned).
+            # Caller does `sign = 1 if dot(diff, normal) >= 0 else -1`.
+            # If we return N_final = (1,1).normalized(). P=(0.4,0.4). q=(0.5,0.4)?
+            # diff = (-0.1, 0). dot((-0.1, 0), (0.7, 0.7)) = -0.07 < 0.
+            # Sign = -1. Correct.
+            
+        return primary_res
+
+
 if __name__ == '__main__':
     # 简单测试
     print("Nagata Patch 计算模块测试")
@@ -528,3 +1118,20 @@ if __name__ == '__main__':
     # 采样测试
     verts, faces = sample_nagata_triangle(x00, x10, x11, n00, n10, n11, resolution=5)
     print(f"采样结果: {len(verts)} 个顶点, {len(faces)} 个三角形")
+
+    # 投影测试
+    print("\n投影测试:")
+    model = NagataModelQuery(
+        vertices=np.array([x00, x10, x11]),
+        triangles=np.array([[0, 1, 2]]),
+        tri_vertex_normals=np.array([[n00, n10, n11]])
+    )
+    
+    test_pt = np.array([0.5, 0.3, 1.0]) # 位于三角形上方
+    res = model.query(test_pt)
+    print(f"查询点: {test_pt}")
+    print(f"最近点: {res['nearest_point']}")
+    print(f"距离: {res['distance']:.6f}")
+    print(f"法向: {res['normal']}")
+    print(f"Face ID: {res['triangle_index']}")
+

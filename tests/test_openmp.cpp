@@ -1,7 +1,7 @@
 /**
  * @file test_openmp.cpp
- * @brief OpenMP并行计算测试
- * @details 测试并行循环、并行归约、线程管理等功能
+ * @brief OpenMP parallel computing test
+ * @details Tests parallel loops, parallel reduction, thread management, etc.
  */
 
 #include <iostream>
@@ -14,12 +14,12 @@
 #endif
 
 /**
- * @brief 测试OpenMP并行循环
- * @return 测试是否通过
+ * @brief Test OpenMP parallel loop
+ * @return Whether the test passed
  */
 bool test_parallel_loop()
 {
-    std::cout << "[OpenMP] 测试并行循环..." << std::endl;
+    std::cout << "[OpenMP] Testing parallel loop..." << std::endl;
 
 #ifdef _OPENMP
     try
@@ -27,7 +27,7 @@ bool test_parallel_loop()
         const int N = 1000000;
         std::vector<double> data(N);
 
-        // 串行版本计时
+        // Serial version timing
         auto start_serial = std::chrono::high_resolution_clock::now();
         for (int i = 0; i < N; ++i)
         {
@@ -36,7 +36,7 @@ bool test_parallel_loop()
         auto end_serial = std::chrono::high_resolution_clock::now();
         auto serial_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_serial - start_serial).count();
 
-        // 并行版本计时
+        // Parallel version timing
         auto start_parallel = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for
         for (int i = 0; i < N; ++i)
@@ -46,19 +46,19 @@ bool test_parallel_loop()
         auto end_parallel = std::chrono::high_resolution_clock::now();
         auto parallel_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_parallel - start_parallel).count();
 
-        std::cout << "串行时间: " << serial_time << " ms" << std::endl;
-        std::cout << "并行时间: " << parallel_time << " ms" << std::endl;
+        std::cout << "Serial time: " << serial_time << " ms" << std::endl;
+        std::cout << "Parallel time: " << parallel_time << " ms" << std::endl;
         if (serial_time > 0)
         {
-            std::cout << "加速比: " << (float)serial_time / parallel_time << "x" << std::endl;
+            std::cout << "Speedup: " << (float)serial_time / parallel_time << "x" << std::endl;
         }
 
-        std::cout << "[OpenMP] 并行循环测试通过" << std::endl;
+        std::cout << "[OpenMP] Parallel loop test passed" << std::endl;
         return true;
     }
     catch (const std::exception& e)
     {
-        std::cerr << "并行循环测试失败: " << e.what() << std::endl;
+        std::cerr << "Parallel loop test failed: " << e.what() << std::endl;
         return false;
     }
 #else
@@ -68,12 +68,12 @@ bool test_parallel_loop()
 }
 
 /**
- * @brief 测试OpenMP并行归约
- * @return 测试是否通过
+ * @brief Test OpenMP parallel reduction
+ * @return Whether the test passed
  */
 bool test_parallel_reduction()
 {
-    std::cout << "[OpenMP] 测试并行归约..." << std::endl;
+    std::cout << "[OpenMP] Testing parallel reduction..." << std::endl;
 
 #ifdef _OPENMP
     try
@@ -81,16 +81,16 @@ bool test_parallel_reduction()
         const int N = 1000000;
         double sum = 0.0;
 
-        // 并行归约求和
+        // Parallel reduction sum
 #pragma omp parallel for reduction(+:sum)
         for (int i = 1; i <= N; ++i)
         {
-            sum += 1.0 / i;  // 调和级数
+            sum += 1.0 / i;  // Harmonic series
         }
 
-        std::cout << "并行归约结果: " << sum << std::endl;
+        std::cout << "Parallel reduction result: " << sum << std::endl;
 
-        // 验证结果（与串行版本比较）
+        // Verify result (compare with serial version)
         double serial_sum = 0.0;
         for (int i = 1; i <= N; ++i)
         {
@@ -99,16 +99,16 @@ bool test_parallel_reduction()
 
         if (std::abs(sum - serial_sum) > 1e-6)
         {
-            std::cerr << "并行归约结果与串行结果不一致" << std::endl;
+            std::cerr << "Parallel reduction result inconsistent with serial result" << std::endl;
             return false;
         }
 
-        std::cout << "[OpenMP] 并行归约测试通过" << std::endl;
+        std::cout << "[OpenMP] Parallel reduction test passed" << std::endl;
         return true;
     }
     catch (const std::exception& e)
     {
-        std::cerr << "并行归约测试失败: " << e.what() << std::endl;
+        std::cerr << "Parallel reduction test failed: " << e.what() << std::endl;
         return false;
     }
 #else
@@ -118,18 +118,18 @@ bool test_parallel_reduction()
 }
 
 /**
- * @brief 测试OpenMP线程信息
- * @return 测试是否通过
+ * @brief Test OpenMP thread info
+ * @return Whether the test passed
  */
 bool test_thread_info()
 {
-    std::cout << "[OpenMP] 测试线程信息..." << std::endl;
+    std::cout << "[OpenMP] Testing thread info..." << std::endl;
 
 #ifdef _OPENMP
     try
     {
         int max_threads = omp_get_max_threads();
-        std::cout << "最大线程数: " << max_threads << std::endl;
+        std::cout << "Max threads: " << max_threads << std::endl;
 
 #pragma omp parallel
         {
@@ -138,16 +138,16 @@ bool test_thread_info()
 
 #pragma omp critical
             {
-                std::cout << "线程 " << thread_id << " / " << num_threads << " 正在运行" << std::endl;
+                std::cout << "Thread " << thread_id << " / " << num_threads << " is running" << std::endl;
             }
         }
 
-        std::cout << "[OpenMP] 线程信息测试通过" << std::endl;
+        std::cout << "[OpenMP] Thread info test passed" << std::endl;
         return true;
     }
     catch (const std::exception& e)
     {
-        std::cerr << "线程信息测试失败: " << e.what() << std::endl;
+        std::cerr << "Thread info test failed: " << e.what() << std::endl;
         return false;
     }
 #else
@@ -157,12 +157,12 @@ bool test_thread_info()
 }
 
 /**
- * @brief 测试OpenMP动态调度
- * @return 测试是否通过
+ * @brief Test OpenMP dynamic schedule
+ * @return Whether the test passed
  */
 bool test_dynamic_schedule()
 {
-    std::cout << "[OpenMP] 测试动态调度..." << std::endl;
+    std::cout << "[OpenMP] Testing dynamic schedule..." << std::endl;
 
 #ifdef _OPENMP
     try
@@ -170,11 +170,11 @@ bool test_dynamic_schedule()
         const int N = 100;
         std::vector<int> results(N);
 
-        // 使用动态调度
+        // Use dynamic schedule
 #pragma omp parallel for schedule(dynamic, 10)
         for (int i = 0; i < N; ++i)
         {
-            // 模拟不同计算量的任务
+            // Simulate tasks with different computation costs
             double sum = 0.0;
             for (int j = 0; j < i * 1000; ++j)
             {
@@ -183,7 +183,7 @@ bool test_dynamic_schedule()
             results[i] = i;
         }
 
-        // 验证结果
+        // Verify results
         bool correct = true;
         for (int i = 0; i < N; ++i)
         {
@@ -196,16 +196,16 @@ bool test_dynamic_schedule()
 
         if (!correct)
         {
-            std::cerr << "动态调度结果错误" << std::endl;
+            std::cerr << "Dynamic schedule result error" << std::endl;
             return false;
         }
 
-        std::cout << "[OpenMP] 动态调度测试通过" << std::endl;
+        std::cout << "[OpenMP] Dynamic schedule test passed" << std::endl;
         return true;
     }
     catch (const std::exception& e)
     {
-        std::cerr << "动态调度测试失败: " << e.what() << std::endl;
+        std::cerr << "Dynamic schedule test failed: " << e.what() << std::endl;
         return false;
     }
 #else
@@ -215,17 +215,17 @@ bool test_dynamic_schedule()
 }
 
 /**
- * @brief 程序入口
+ * @brief Program entry
  */
 int main()
 {
     std::cout << "========================================" << std::endl;
-    std::cout << "OpenMP 并行计算测试" << std::endl;
+    std::cout << "OpenMP Parallel Computing Test" << std::endl;
 #ifdef _OPENMP
-    std::cout << "OpenMP版本: " << _OPENMP << std::endl;
-    std::cout << "最大线程数: " << omp_get_max_threads() << std::endl;
+    std::cout << "OpenMP version: " << _OPENMP << std::endl;
+    std::cout << "Max threads: " << omp_get_max_threads() << std::endl;
 #else
-    std::cout << "OpenMP未启用" << std::endl;
+    std::cout << "OpenMP not enabled" << std::endl;
 #endif
     std::cout << "========================================" << std::endl;
 
@@ -239,12 +239,12 @@ int main()
     std::cout << "========================================" << std::endl;
     if (all_passed)
     {
-        std::cout << "所有测试通过!" << std::endl;
+        std::cout << "All tests passed!" << std::endl;
         return 0;
     }
     else
     {
-        std::cout << "部分测试失败!" << std::endl;
+        std::cout << "Some tests failed!" << std::endl;
         return 1;
     }
 }

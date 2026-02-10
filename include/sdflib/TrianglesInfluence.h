@@ -11,7 +11,7 @@
 #include "InterpolationMethods.h"
 #include "utils/Timer.h"
 #include "utils/GJK.h"
-#include <InteractiveComputerGraphics/TriangleMeshDistance.h>
+#include "TriangleMeshDistance.h"
 
 #include <vector>
 #include <array>

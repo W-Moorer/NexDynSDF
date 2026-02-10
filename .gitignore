@@ -42,6 +42,7 @@
 
 build/
 output/
+vcpkg_installed/
 documents/
 temps/
 .trae/

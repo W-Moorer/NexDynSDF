@@ -88,111 +88,122 @@ inline void getNeighboursVectorInUniformGrid(uint32_t outChildId, glm::ivec3 cur
     }
 }
 
-template<typename TrianglesInfluenceStrategy>
-void OctreeSdf::initOctreeWithContinuity(const Mesh& mesh, uint32_t startDepth, uint32_t maxDepth,
-                                         OctreeSdf::TerminationRule terminationRule,
-                                         TerminationRuleParams terminationRuleParams)
-{
-    typedef typename TrianglesInfluenceStrategy::InterpolationMethod InterpolationMethod;
-    typedef BreadthFirstNodeInfo<typename TrianglesInfluenceStrategy::VertexInfo, InterpolationMethod::VALUES_PER_VERTEX> NodeInfo;
-
-    const float sqTerminationThreshold = terminationRuleParams[0] * terminationRuleParams[0];
-
-    std::vector<TriangleUtils::TriangleData> trianglesData(TriangleUtils::calculateMeshTriangleData(mesh));
-    
-    const uint32_t startOctreeDepth = glm::min(startDepth, START_OCTREE_DEPTH);
-
-    const std::array<glm::vec3, 8> childrens = 
+    template<typename TrianglesInfluenceStrategy>
+    void OctreeSdf::initOctreeWithContinuity(const Mesh& mesh, uint32_t startDepth, uint32_t maxDepth,
+                                             OctreeSdf::TerminationRule terminationRule,
+                                             TerminationRuleParams terminationRuleParams)
     {
-        glm::vec3(-1.0f, -1.0f, -1.0f),
-        glm::vec3(1.0f, -1.0f, -1.0f),
-        glm::vec3(-1.0f, 1.0f, -1.0f),
-        glm::vec3(1.0f, 1.0f, -1.0f),
-
-        glm::vec3(-1.0f, -1.0f, 1.0f),
-        glm::vec3(1.0f, -1.0f, 1.0f),
-        glm::vec3(-1.0f, 1.0f, 1.0f),
-        glm::vec3(1.0f, 1.0f, 1.0f)
-    };
-
-    const std::array<glm::vec3, 19> nodeSamplePoints =
-    {
-        glm::vec3(0.0f, -1.0f, -1.0f),
-        glm::vec3(-1.0f, 0.0f, -1.0f),
-        glm::vec3(0.0f, 0.0f, -1.0f),
-        glm::vec3(1.0f, 0.0f, -1.0f),
-        glm::vec3(0.0f, 1.0f, -1.0f),
-
-        glm::vec3(-1.0f, -1.0f, 0.0f),
-        glm::vec3(0.0f, -1.0f, 0.0f),
-        glm::vec3(1.0f, -1.0f, 0.0f),
-        glm::vec3(-1.0f, 0.0f, 0.0f),
-        glm::vec3(0.0f),
-        glm::vec3(1.0f, 0.0f, 0.0f),
-        glm::vec3(-1.0f, 1.0f, 0.0f),
-        glm::vec3(0.0f, 1.0f, 0.0f),
-        glm::vec3(1.0f, 1.0f, 0.0f),
-
-        glm::vec3(0.0f, -1.0f, 1.0f),
-        glm::vec3(-1.0f, 0.0f, 1.0f),
-        glm::vec3(0.0f, 0.0f, 1.0f),
-        glm::vec3(1.0f, 0.0f, 1.0f),
-        glm::vec3(0.0f, 1.0f, 1.0f),
-    };
-
-    const std::array<uint32_t, 24> neigbourMasks =
-    {
-        // 001
-        0b00100010010010001000, // [-,_,_]
-        0b00001000100100100010, // [+,_,_]
-        0b00000000000000000000, // NULL
-        0b00000000000000000000, // NULL
-        
-        // 010
-        0b01000011100000010000, // [_,-,_]
-        0b00000100000011100001, // [_,+,_]
-        0b00000000000000000000, // NULL
-        0b00000000000000000000, // NULL
-
-        // 011
-        0b00000010000000000000, // [-,-,_]
-        0b00000000100000000000, // [+,-,_]
-        0b00000000000010000000, // [-,+,_]
-        0b00000000000000100000, // [+,+,_]
-
-        // 100
-        0b01111100000000000000, // [_,_,-]
-        0b00000000000000011111, // [_,_,+]
-        0b00000000000000000000, // NULL
-        0b00000000000000000000, // NULL
-
-        // 101
-        0b00100000000000000000, // [-,_,-]
-        0b00001000000000000000, // [+,_,-]
-        0b00000000000000001000, // [-,_,+]
-        0b00000000000000000010, // [+,_,+]
-
-        // 110
-        0b01000000000000000000, // [_,-,-]
-        0b00000100000000000000, // [_,+,-]        
-        0b00000000000000010000, // [_,-,+]
-        0b00000000000000000001  // [_,+,+]
-    };
-
-    uint8_t currentBuffer = 0;
-    uint8_t nextBuffer = 1;
-    std::array<std::vector<NodeInfo>, 3> nodesBuffer;
-	nodesBuffer.fill(std::vector<NodeInfo>());
-
-    const uint32_t numTriangles = trianglesData.size();
-    std::vector<uint32_t> startTriangles(numTriangles);
-    for(uint32_t i=0; i < numTriangles; i++)
-    {
-        startTriangles[i] = i;
+        TrianglesInfluenceStrategy trianglesInfluence;
+        trianglesInfluence.initCaches(mBox, maxDepth);
+        initOctreeWithContinuity(mesh, startDepth, maxDepth, terminationRule, terminationRuleParams, trianglesInfluence);
     }
+    
+    template<typename TrianglesInfluenceStrategy>
+    void OctreeSdf::initOctreeWithContinuity(const Mesh& mesh, uint32_t startDepth, uint32_t maxDepth,
+                                             OctreeSdf::TerminationRule terminationRule,
+                                             TerminationRuleParams terminationRuleParams,
+                                             TrianglesInfluenceStrategy& trianglesInfluence)
+    {
+        typedef typename TrianglesInfluenceStrategy::InterpolationMethod InterpolationMethod;
+        typedef BreadthFirstNodeInfo<typename TrianglesInfluenceStrategy::VertexInfo, InterpolationMethod::VALUES_PER_VERTEX> NodeInfo;
 
-    TrianglesInfluenceStrategy trianglesInfluence;
-    trianglesInfluence.initCaches(mBox, maxDepth);
+        const float sqTerminationThreshold = terminationRuleParams[0] * terminationRuleParams[0];
+
+        std::vector<TriangleUtils::TriangleData> trianglesData(TriangleUtils::calculateMeshTriangleData(mesh));
+        
+        const uint32_t startOctreeDepth = glm::min(startDepth, START_OCTREE_DEPTH);
+
+        const std::array<glm::vec3, 8> childrens = 
+        {
+            glm::vec3(-1.0f, -1.0f, -1.0f),
+            glm::vec3(1.0f, -1.0f, -1.0f),
+            glm::vec3(-1.0f, 1.0f, -1.0f),
+            glm::vec3(1.0f, 1.0f, -1.0f),
+
+            glm::vec3(-1.0f, -1.0f, 1.0f),
+            glm::vec3(1.0f, -1.0f, 1.0f),
+            glm::vec3(-1.0f, 1.0f, 1.0f),
+            glm::vec3(1.0f, 1.0f, 1.0f)
+        };
+
+        const std::array<glm::vec3, 19> nodeSamplePoints =
+        {
+            glm::vec3(0.0f, -1.0f, -1.0f),
+            glm::vec3(-1.0f, 0.0f, -1.0f),
+            glm::vec3(0.0f, 0.0f, -1.0f),
+            glm::vec3(1.0f, 0.0f, -1.0f),
+            glm::vec3(0.0f, 1.0f, -1.0f),
+
+            glm::vec3(-1.0f, -1.0f, 0.0f),
+            glm::vec3(0.0f, -1.0f, 0.0f),
+            glm::vec3(1.0f, -1.0f, 0.0f),
+            glm::vec3(-1.0f, 0.0f, 0.0f),
+            glm::vec3(0.0f),
+            glm::vec3(1.0f, 0.0f, 0.0f),
+            glm::vec3(-1.0f, 1.0f, 0.0f),
+            glm::vec3(0.0f, 1.0f, 0.0f),
+            glm::vec3(1.0f, 1.0f, 0.0f),
+
+            glm::vec3(0.0f, -1.0f, 1.0f),
+            glm::vec3(-1.0f, 0.0f, 1.0f),
+            glm::vec3(0.0f, 0.0f, 1.0f),
+            glm::vec3(1.0f, 0.0f, 1.0f),
+            glm::vec3(0.0f, 1.0f, 1.0f),
+        };
+
+        const std::array<uint32_t, 24> neigbourMasks =
+        {
+            // 001
+            0b00100010010010001000, // [-,_,_]
+            0b00001000100100100010, // [+,_,_]
+            0b00000000000000000000, // NULL
+            0b00000000000000000000, // NULL
+            
+            // 010
+            0b01000011100000010000, // [_,-,_]
+            0b00000100000011100001, // [_,+,_]
+            0b00000000000000000000, // NULL
+            0b00000000000000000000, // NULL
+
+            // 011
+            0b00000010000000000000, // [-,-,_]
+            0b00000000100000000000, // [+,-,_]
+            0b00000000000010000000, // [-,+,_]
+            0b00000000000000100000, // [+,+,_]
+
+            // 100
+            0b01111100000000000000, // [_,_,-]
+            0b00000000000000011111, // [_,_,+]
+            0b00000000000000000000, // NULL
+            0b00000000000000000000, // NULL
+
+            // 101
+            0b00100000000000000000, // [-,_,-]
+            0b00001000000000000000, // [+,_,-]
+            0b00000000000000001000, // [-,_,+]
+            0b00000000000000000010, // [+,_,+]
+
+            // 110
+            0b01000000000000000000, // [_,-,-]
+            0b00000100000000000000, // [_,+,-]        
+            0b00000000000000010000, // [_,-,+]
+            0b00000000000000000001  // [_,+,+]
+        };
+
+        uint8_t currentBuffer = 0;
+        uint8_t nextBuffer = 1;
+        std::array<std::vector<NodeInfo>, 3> nodesBuffer;
+        nodesBuffer.fill(std::vector<NodeInfo>());
+
+        const uint32_t numTriangles = trianglesData.size();
+        std::vector<uint32_t> startTriangles(numTriangles);
+        for(uint32_t i=0; i < numTriangles; i++)
+        {
+            startTriangles[i] = i;
+        }
+
+        // TrianglesInfluenceStrategy trianglesInfluence;
+        // trianglesInfluence.initCaches(mBox, maxDepth);
 
     // Create the grid
     {

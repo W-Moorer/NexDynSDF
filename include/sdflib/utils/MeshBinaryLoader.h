@@ -8,37 +8,38 @@
 #include <iostream>
 #include <cstdint>
 #include "NagataPatch.h"
+#include "Mesh.h"
 
 namespace sdflib
 {
 namespace MeshBinaryLoader
 {
     /**
-     * @brief 网格数据结构
+     * @brief Mesh data structure
      * 
-     * 存储从二进制文件加载的网格数据
+     * Stores mesh data loaded from binary files
      */
     struct MeshData
     {
-        std::vector<glm::vec3> vertices;                    // 顶点坐标数组
-        std::vector<std::array<uint32_t, 3>> faces;        // 面片索引数组
-        std::vector<std::array<glm::vec3, 3>> faceNormals; // 面片顶点法向量数组
+        std::vector<glm::vec3> vertices;                    // Vertex coordinates
+        std::vector<std::array<uint32_t, 3>> faces;        // Face indices
+        std::vector<std::array<glm::vec3, 3>> faceNormals; // Normals for each vertex of each face
         
         /**
-         * @brief 获取顶点数量
+         * @brief Get number of vertices
          */
         size_t getNumVertices() const { return vertices.size(); }
         
         /**
-         * @brief 获取面片数量
+         * @brief Get number of faces
          */
         size_t getNumFaces() const { return faces.size(); }
         
         /**
-         * @brief 获取指定面片的顶点坐标
+         * @brief Get vertex coordinates of a face
          * 
-         * @param faceIndex 面片索引
-         * @return std::array<glm::vec3, 3> 三个顶点的坐标
+         * @param faceIndex Face index
+         * @return std::array<glm::vec3, 3> Coordinates of the three vertices
          */
         std::array<glm::vec3, 3> getFaceVertices(size_t faceIndex) const
         {
@@ -51,10 +52,10 @@ namespace MeshBinaryLoader
         }
         
         /**
-         * @brief 获取指定面片的顶点法向量
+         * @brief Get vertex normals of a face
          * 
-         * @param faceIndex 面片索引
-         * @return std::array<glm::vec3, 3> 三个顶点在该面片内的法向量
+         * @param faceIndex Face index
+         * @return std::array<glm::vec3, 3> Three vertex normals in the face
          */
         std::array<glm::vec3, 3> getFaceVertexNormals(size_t faceIndex) const
         {
@@ -62,10 +63,10 @@ namespace MeshBinaryLoader
         }
         
         /**
-         * @brief 计算边界框
+         * @brief Compute bounding box
          * 
-         * @param minBound 输出：最小边界
-         * @param maxBound 输出：最大边界
+         * @param minBound Output: min bound
+         * @param maxBound Output: max bound
          */
         void computeBounds(glm::vec3& minBound, glm::vec3& maxBound) const
         {
@@ -88,31 +89,31 @@ namespace MeshBinaryLoader
     };
     
     /**
-     * @brief 从二进制文件加载网格数据
+     * @brief Load mesh data from binary file
      * 
-     * 文件格式:
-     *     - 4字节: 顶点数量 (uint32)
-     *     - 4字节: 面片数量 (uint32)
-     *     - N*12字节: 顶点坐标数组 (float32 * 3 * N)
-     *     - M*12字节: 面片索引数组 (uint32 * 3 * M)
-     *     - M*36字节: 面片顶点法向量数组 (float32 * 3 * 3 * M)
+     * File format:
+     *     - 4 bytes: numVertices (uint32)
+     *     - 4 bytes: numFaces (uint32)
+     *     - N*12 bytes: vertices (float32 * 3 * N)
+     *     - M*12 bytes: faces (uint32 * 3 * M)
+     *     - M*36 bytes: face normals (float32 * 3 * 3 * M)
      * 
-     * @param filepath 二进制文件路径
-     * @return MeshData 加载的网格数据
+     * @param filepath binary file path
+     * @return MeshData loaded mesh data
      */
     inline MeshData loadFromBinary(const std::string& filepath)
     {
         MeshData meshData;
         
-        // 打开文件
+        // Open file
         std::ifstream file(filepath, std::ios::binary);
         if (!file.is_open())
         {
-            std::cerr << "MeshBinaryLoader: 无法打开文件 " << filepath << std::endl;
+            std::cerr << "MeshBinaryLoader: Cannot open file " << filepath << std::endl;
             return meshData;
         }
         
-        // 读取头部信息
+        // Read header
         uint32_t numVertices = 0;
         uint32_t numFaces = 0;
         
@@ -121,16 +122,16 @@ namespace MeshBinaryLoader
         
         if (!file)
         {
-            std::cerr << "MeshBinaryLoader: 读取头部信息失败 " << filepath << std::endl;
+            std::cerr << "MeshBinaryLoader: Failed to read header " << filepath << std::endl;
             return meshData;
         }
         
-        // 分配内存
+        // Allocate memory
         meshData.vertices.resize(numVertices);
         meshData.faces.resize(numFaces);
         meshData.faceNormals.resize(numFaces);
         
-        // 读取顶点坐标
+        // Read vertices
         for (uint32_t i = 0; i < numVertices; ++i)
         {
             float x, y, z;
@@ -140,7 +141,7 @@ namespace MeshBinaryLoader
             meshData.vertices[i] = glm::vec3(x, y, z);
         }
         
-        // 读取面片索引
+        // Read faces
         for (uint32_t i = 0; i < numFaces; ++i)
         {
             uint32_t i0, i1, i2;
@@ -150,7 +151,7 @@ namespace MeshBinaryLoader
             meshData.faces[i] = {i0, i1, i2};
         }
         
-        // 读取面片顶点法向量
+        // Read face normals
         for (uint32_t i = 0; i < numFaces; ++i)
         {
             for (int j = 0; j < 3; ++j)
@@ -165,7 +166,7 @@ namespace MeshBinaryLoader
         
         if (!file)
         {
-            std::cerr << "MeshBinaryLoader: 读取数据失败 " << filepath << std::endl;
+            std::cerr << "MeshBinaryLoader: Failed to read data " << filepath << std::endl;
             meshData.vertices.clear();
             meshData.faces.clear();
             meshData.faceNormals.clear();
@@ -174,20 +175,20 @@ namespace MeshBinaryLoader
         
         file.close();
         
-        std::cout << "MeshBinaryLoader: 成功加载 " << filepath << std::endl;
-        std::cout << "  顶点数量: " << numVertices << std::endl;
-        std::cout << "  面片数量: " << numFaces << std::endl;
+        std::cout << "MeshBinaryLoader: Successfully loaded " << filepath << std::endl;
+        std::cout << "  Vertices: " << numVertices << std::endl;
+        std::cout << "  Faces: " << numFaces << std::endl;
         
         return meshData;
     }
     
     /**
-     * @brief 从二进制文件创建NagataPatchData数组
+     * @brief Create NagataPatchData array from mesh data
      * 
-     * 使用加载的网格数据创建Nagata曲面数据，用于Nagata插值
+     * Uses loaded mesh data to create Nagata patches for interpolation
      * 
-     * @param meshData 网格数据
-     * @return std::vector<NagataPatch::NagataPatchData> Nagata曲面数据数组
+     * @param meshData mesh data
+     * @return std::vector<NagataPatch::NagataPatchData> Nagata patches
      */
     inline std::vector<NagataPatch::NagataPatchData> createNagataPatchData(
         const MeshData& meshData)
@@ -197,13 +198,13 @@ namespace MeshBinaryLoader
         
         for (size_t i = 0; i < meshData.getNumFaces(); ++i)
         {
-            // 获取面片顶点坐标
+            // Get face vertex coordinates
             auto faceVertices = meshData.getFaceVertices(i);
             
-            // 获取面片顶点法向量
+            // Get face vertex normals
             auto faceNormals = meshData.getFaceVertexNormals(i);
             
-            // 创建Nagata曲面数据
+            // Create Nagata patch data
             nagataPatches.emplace_back(
                 faceVertices[0], faceVertices[1], faceVertices[2],
                 faceNormals[0], faceNormals[1], faceNormals[2]
@@ -212,21 +213,64 @@ namespace MeshBinaryLoader
         
         return nagataPatches;
     }
+
+    /**
+     * @brief Create NagataPatchData array from Mesh object
+     * @param mesh Mesh object
+     * @param outPatches Output Nagata patches
+     */
+    inline void createNagataPatchData(
+        const Mesh& mesh,
+        std::vector<NagataPatch::NagataPatchData>& outPatches)
+    {
+        const auto& vertices = mesh.getVertices();
+        const auto& indices = mesh.getIndices();
+        const auto& normals = mesh.getNormals();
+        
+        size_t numTriangles = indices.size() / 3;
+        outPatches.clear();
+        outPatches.reserve(numTriangles);
+        
+        bool hasNormals = !normals.empty();
+        if (!hasNormals)
+        {
+            std::cerr << "MeshBinaryLoader: Mesh has no normals! Nagata patches will have zero normals." << std::endl;
+        }
+
+        for (size_t i = 0; i < numTriangles; ++i)
+        {
+            uint32_t idx0 = indices[i * 3];
+            uint32_t idx1 = indices[i * 3 + 1];
+            uint32_t idx2 = indices[i * 3 + 2];
+            
+            glm::vec3 v0 = vertices[idx0];
+            glm::vec3 v1 = vertices[idx1];
+            glm::vec3 v2 = vertices[idx2];
+            
+            glm::vec3 n0 = hasNormals ? normals[idx0] : glm::vec3(0.0f);
+            glm::vec3 n1 = hasNormals ? normals[idx1] : glm::vec3(0.0f);
+            glm::vec3 n2 = hasNormals ? normals[idx2] : glm::vec3(0.0f);
+            
+            // If explicit face normals are not available (Mesh only has vertex normals),
+            // this uses smoothed vertex normals.
+            outPatches.emplace_back(v0, v1, v2, n0, n1, n2);
+        }
+    }
     
     /**
-     * @brief 从 NSM 文件加载网格数据
+     * @brief Load mesh data from NSM file
      * 
-     * NSM 文件格式:
-     *     - 64字节 文件头:
-     *         - 4字节: Magic "NSM\0"
-     *         - 4字节: Version (uint32)
-     *         - 4字节: NumVertices (uint32)
-     *         - 4字节: NumTriangles (uint32)
-     *         - 48字节: Reserved
-     *     - N*24字节: 顶点坐标 (double * 3 * N)
-     *     - M*12字节: 三角形索引 (uint32 * 3 * M)
-     *     - M*4字节: 面片 ID (uint32 * M)
-     *     - M*72字节: 顶点法向量 (double * 3 * 3 * M)
+     * NSM file format:
+     *     - 64 bytes header:
+     *         - 4 bytes: Magic "NSM\0"
+     *         - 4 bytes: Version (uint32)
+     *         - 4 bytes: NumVertices (uint32)
+     *         - 4 bytes: NumTriangles (uint32)
+     *         - 48 bytes: Reserved
+     *     - N*24 bytes: vertices (double * 3 * N)
+     *     - M*12 bytes: triangles (uint32 * 3 * M)
+     *     - M*4 bytes: face IDs (uint32 * M)
+     *     - M*72 bytes: vertex normals (double * 3 * 3 * M)
      */
     inline MeshData loadFromNSM(const std::string& filepath)
     {
@@ -235,43 +279,43 @@ namespace MeshBinaryLoader
         std::ifstream file(filepath, std::ios::binary);
         if (!file.is_open())
         {
-            std::cerr << "MeshBinaryLoader: 无法打开 NSM 文件 " << filepath << std::endl;
+            std::cerr << "MeshBinaryLoader: Cannot open NSM file " << filepath << std::endl;
             return meshData;
         }
         
-        // 读取文件头 (64 bytes)
+        // Read header (64 bytes)
         char header[64];
         file.read(header, 64);
         if (!file)
         {
-            std::cerr << "MeshBinaryLoader: NSM 文件头不完整" << std::endl;
+            std::cerr << "MeshBinaryLoader: NSM header incomplete" << std::endl;
             return meshData;
         }
         
-        // 验证 magic
+        // Validate magic
         if (header[0] != 'N' || header[1] != 'S' || header[2] != 'M' || header[3] != '\0')
         {
-            std::cerr << "MeshBinaryLoader: 无效的 NSM magic" << std::endl;
+            std::cerr << "MeshBinaryLoader: Invalid NSM magic" << std::endl;
             return meshData;
         }
         
-        // 解析头部
+        // Parse header
         uint32_t version = *reinterpret_cast<uint32_t*>(header + 4);
         uint32_t numVertices = *reinterpret_cast<uint32_t*>(header + 8);
         uint32_t numTriangles = *reinterpret_cast<uint32_t*>(header + 12);
         
         if (version != 1)
         {
-            std::cerr << "MeshBinaryLoader: 不支持的 NSM 版本 " << version << std::endl;
+            std::cerr << "MeshBinaryLoader: Unsupported NSM version " << version << std::endl;
             return meshData;
         }
         
-        // 分配内存
+        // Allocate memory
         meshData.vertices.resize(numVertices);
         meshData.faces.resize(numTriangles);
         meshData.faceNormals.resize(numTriangles);
         
-        // 读取顶点坐标 (double)
+        // Read vertices (double)
         for (uint32_t i = 0; i < numVertices; ++i)
         {
             double x, y, z;
@@ -283,7 +327,7 @@ namespace MeshBinaryLoader
                                               static_cast<float>(z));
         }
         
-        // 读取三角形索引
+        // Read faces
         for (uint32_t i = 0; i < numTriangles; ++i)
         {
             uint32_t i0, i1, i2;
@@ -293,10 +337,10 @@ namespace MeshBinaryLoader
             meshData.faces[i] = {i0, i1, i2};
         }
         
-        // 跳过面片 ID
+        // Skip face IDs
         file.seekg(numTriangles * sizeof(uint32_t), std::ios::cur);
         
-        // 读取顶点法向量 (double)
+        // Read vertex normals (double)
         for (uint32_t i = 0; i < numTriangles; ++i)
         {
             for (int j = 0; j < 3; ++j)
@@ -313,16 +357,16 @@ namespace MeshBinaryLoader
         
         if (!file)
         {
-            std::cerr << "MeshBinaryLoader: NSM 数据读取失败" << std::endl;
+            std::cerr << "MeshBinaryLoader: NSM data read failed" << std::endl;
             meshData.vertices.clear();
             meshData.faces.clear();
             meshData.faceNormals.clear();
             return meshData;
         }
         
-        std::cout << "MeshBinaryLoader: 成功加载 NSM 文件 " << filepath << std::endl;
-        std::cout << "  顶点数: " << numVertices << std::endl;
-        std::cout << "  三角形数: " << numTriangles << std::endl;
+        std::cout << "MeshBinaryLoader: Successfully loaded NSM file " << filepath << std::endl;
+        std::cout << "  Vertices: " << numVertices << std::endl;
+        std::cout << "  Triangles: " << numTriangles << std::endl;
         
         return meshData;
     }

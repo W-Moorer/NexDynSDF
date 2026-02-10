@@ -29,6 +29,9 @@ public:
     Mesh(glm::vec3* vertices, uint32_t numVertices,
          uint32_t* indices, uint32_t numIndices);
 
+    // Create from moved data
+    Mesh(std::vector<glm::vec3>&& vertices, std::vector<uint32_t>&& indices);
+
     // Getters
     const std::vector<glm::vec3>& getVertices() const { return mVertices; }
     const std::vector<uint32_t>& getIndices() const { return mIndices; }
@@ -37,6 +40,7 @@ public:
     
     std::vector<glm::vec3>& getVertices() { return mVertices; }
     std::vector<uint32_t>& getIndices() { return mIndices; }
+    std::vector<glm::vec3>& getNormals() { return mNormals; }
 
     // Transform
     void applyTransform(glm::mat4 trans);

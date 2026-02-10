@@ -6,8 +6,8 @@
 
 namespace glm
 {
-    // 序列化函数已在 BoundingBox.h 中定义
-    // 这里保留 ivec3 的序列化
+    // Serialization functions are defined in BoundingBox.h
+    // ivec3 serialization is kept here
     template<class Archive>
     void serialize(Archive & archive,
                 glm::ivec3 & m)

@@ -444,14 +444,14 @@ namespace TriangleUtils
             const glm::vec3& v1 = vertices[indices[i + 1]];
             const glm::vec3& v2 = vertices[indices[i + 2]];
             
-            // 从三角形数据中获取法向量（已经变换到世界坐标系）
-            // verticesNormal存储在三角形局部坐标系中，需要变换回世界坐标系
+            // Get normals from triangle data (already transformed to world coordinates)
+            // verticesNormal are stored in triangle local coordinates, need to transform back to world coordinates
             glm::mat3 invTransform = glm::inverse(trianglesData[tIndex].transform);
             glm::vec3 n0 = glm::normalize(invTransform * trianglesData[tIndex].verticesNormal[0]);
             glm::vec3 n1 = glm::normalize(invTransform * trianglesData[tIndex].verticesNormal[1]);
             glm::vec3 n2 = glm::normalize(invTransform * trianglesData[tIndex].verticesNormal[2]);
             
-            // 创建Nagata曲面数据
+            // Create Nagata surface data
             nagataPatches.emplace_back(v0, v1, v2, n0, n1, n2);
         }
         

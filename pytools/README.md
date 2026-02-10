@@ -9,11 +9,11 @@
 | 工具 | 功能 | 可视化库 |
 |------|------|----------|
 | `nsm_reader.py` | NSM网格文件读取与可视化（含法向量） | PyVista |
-| `nagata_patch.py` | Nagata曲面插值计算模块 | - |
-| `curved_triangle_patch.py` | 曲面三角形（Phong+边界锁定）计算模块 | - |
-| `visualize_nagata.py` | NSM文件Nagata曲面可视化 | PyVista |
+| `nagata_patch.py` | Nagata曲面核心数学库 (插值、求导、投影查询) | - |
+| `query_nsm_point.py` | 查询NSM模型上任意点的最近点与法向 (Nagata精度) | Scipy (可选) |
+| `check_nagata_cracks.py` | Nagata Patch几何裂缝检测工具 | PyVista |
+| `visualize_nagata.py` | NSM文件Nagata曲面可视化（支持裂缝修复） | PyVista |
 | `visualize_obj_nagata.py` | OBJ文件Nagata曲面可视化（支持法向量计算） | PyVista |
-| `visualize_curved_triangle.py` | 曲面三角形可视化（支持NSM/OBJ） | PyVista |
 | `visualize_sdf.py` | SDF零等值面可视化 | Matplotlib / Plotly |
 | `visualize_sdf_pyvista.py` | SDF零等值面可视化（交互式） | PyVista |
 | `visualize_sdf_pyvista_offscreen.py` | SDF零等值面可视化（离屏渲染保存图片） | PyVista |
@@ -143,101 +143,7 @@ x(u,v) = x00*(1-u) + x10*(u-v) + x11*v
 
 ---
 
-## 3.5 curved_triangle_patch.py - 曲面三角形计算模块
 
-### 功能
-- 基于 Phong 几何曲面 + 边界锁定修正
-- 尖锐边保持直线段（硬直棱）
-- 光滑边使用 1D Phong 曲线
-- 边界锁定保证无裂缝拼接
-
-### 核心函数
-
-| 函数 | 功能 |
-|------|------|
-| `build_edge_map(triangles)` | 构建边邻接表 |
-| `classify_sharp_edges(...)` | 检测尖锐边（二面角/法向夹角） |
-| `build_smoothing_groups(...)` | 构建平滑分组 |
-| `unify_normals_in_groups(...)` | 统一组内法向 |
-| `build_edge_curves(...)` | 构建共享边界曲线 |
-| `boundary_locked_surface(...)` | 计算边界锁定曲面点 |
-| `sample_all_curved_triangles(...)` | 采样整个网格 |
-
-### 在Python代码中使用
-```python
-from curved_triangle_patch import sample_all_curved_triangles
-from nsm_reader import load_nsm
-
-data = load_nsm('model.nsm')
-verts, faces, face_map = sample_all_curved_triangles(
-    data.vertices,
-    data.triangles,
-    data.tri_vertex_normals,
-    resolution=10,
-    theta_deg=45.0,  # 二面角阈值
-    phi_deg=30.0,    # 法向夹角阈值
-    alpha_e=0.5,     # 边曲线弯曲强度
-    alpha_t=0.6      # 曲面混合系数
-)
-```
-
-### 算法原理
-
-边界锁定修正公式:
-```
-S(u,v,w) = S0(u,v,w)
-         + b_01 * (C_01(t_01) - S0_01(t_01))
-         + b_12 * (C_12(t_12) - S0_12(t_12))
-         + b_20 * (C_20(t_20) - S0_20(t_20))
-```
-
-参考: `documents/curved_triangle_pipeline.md`
-
----
-
-## 3.6 visualize_curved_triangle.py - 曲面三角形可视化
-
-### 功能
-- 读取 NSM 或 OBJ 文件
-- 计算并可视化曲面三角形
-- 并排对比原始网格与曲面
-
-### 使用方法
-
-#### 基本用法
-```bash
-python visualize_curved_triangle.py <nsm/obj文件>
-```
-
-#### 命令行参数
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `-r, --resolution N` | 采样密度 | 10 |
-| `--theta N` | 二面角阈值（度） | 45 |
-| `--phi N` | 法向夹角阈值（度） | 30 |
-| `--alpha-e N` | 边曲线弯曲强度 | 0.5 |
-| `--alpha-t N` | 曲面混合系数 | 0.6 |
-| `--bubble` | 启用 bubble 位移 | 否 |
-| `--beta N` | bubble 强度 | 0.1 |
-| `--edges` | 显示网格边 | 否 |
-| `--no-compare` | 不显示原始网格对比 | 显示对比 |
-
-#### 示例
-```bash
-# 基本可视化
-python visualize_curved_triangle.py ../models/nsm/Gear_I.nsm
-
-# 高分辨率采样
-python visualize_curved_triangle.py model.nsm -r 20
-
-# 调整曲面参数
-python visualize_curved_triangle.py model.obj --alpha-t 0.8 --alpha-e 0.6
-
-# 启用 bubble 位移增强弧度
-python visualize_curved_triangle.py model.nsm --bubble --beta 0.1
-```
-
----
 
 
 ## 3. visualize_nagata.py - Nagata曲面可视化工具
@@ -267,14 +173,16 @@ python visualize_nagata.py <nsm文件路径>
 | `--no-compare` | 不显示原始网格对比 | 显示对比 |
 | `--edges` | 显示网格边 | 不显示 |
 | `--color-by-id` | 按面片ID着色 | 否 |
+| `--enhance` | 启用折纹裂隙修复 | 否 |
+| `--bake` | 保存增强数据到 .eng 文件 | 否 |
 
 #### 示例
 ```bash
 # 基本可视化（并排对比）
 python visualize_nagata.py ../models/nsm/Gear_I.nsm
 
-# 提高采样密度
-python visualize_nagata.py ../models/nsm/Gear_I.nsm -r 20
+# 启用裂缝修复并保存增强数据
+python visualize_nagata.py ../models/nsm/Gear_I.nsm --enhance --bake
 
 # 使用平均法向量策略 (平滑锐边/修复破面)
 python visualize_nagata.py ../models/nsm/Gear_I.nsm --scheme average
@@ -524,6 +432,33 @@ NSM（NexDyn Surface Mesh）是自定义的二进制网格文件格式：
 
 ---
 
+## 8. check_nagata_cracks.py - Nagata Patch 裂缝检测工具
+
+### 功能
+- 检测 NSM 模型中是否存在会导致 Nagata 曲面裂缝的几何隐患
+- 分析共享顶点的法向量一致性
+- 计算相邻面片在共享边上的几何缝隙
+
+### 使用方法
+
+#### 命令行参数
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `filepath` | NSM文件路径 | 必需 |
+| `-g, --gap` | 几何缝隙阈值(Distance) | 1e-4 |
+| `--no-vis` | 不显示可视化窗口 | 显示 |
+
+#### 示例
+```bash
+# 基本检测
+python check_nagata_cracks.py ../models/nsm/Gear_I.nsm
+
+# 指定更严格的阈值
+python check_nagata_cracks.py ../models/nsm/Gear_I.nsm -g 1e-5
+```
+
+---
+
 ## 常见问题
 
 ### Q: 安装PyVista时遇到问题？
@@ -551,6 +486,7 @@ python visualize_sdf_pyvista_offscreen.py data.raw -o output.png
 
 ## 更新日志
 
+- **2026-02-05**: 移除 `curved_triangle` 相关工具（文件整理）；更新 `visualize_nagata.py` 支持 `--enhance` 模式；添加 `check_nagata_cracks.py`。
 - **2026-02-02**: 添加 `visualize_obj_nagata.py` - OBJ文件Nagata曲面可视化（支持法向量计算）
 - **2026-02-02**: 添加 `nagata_patch.py`, `visualize_nagata.py` - Nagata曲面插值计算与可视化
 - **2025-02-02**: 添加 `nsm_reader.py` - NSM网格可视化工具

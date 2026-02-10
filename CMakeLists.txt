@@ -69,6 +69,9 @@ add_library(sdflib STATIC
     src/utils/Timer.cpp
     src/utils/GJK.cpp
     src/utils/TriangleUtils.cpp
+    src/utils/NagataPatch.cpp
+    src/utils/NagataEnhanced.cpp
+    src/utils/WindingNumberOracle.cpp
 )
 
 target_include_directories(sdflib PUBLIC
@@ -115,9 +118,9 @@ add_executable(test_all tests/test_all.cpp)
 target_link_libraries(test_all PRIVATE sdflib)
 add_test(NAME all_test COMMAND test_all)
 
-add_executable(test_nagata_enhanced tests/test_nagata_enhanced.cpp)
-target_link_libraries(test_nagata_enhanced PRIVATE sdflib)
-add_test(NAME nagata_enhanced_test COMMAND test_nagata_enhanced)
+add_executable(test_hybrid_accuracy tests/test_hybrid_accuracy.cpp)
+target_link_libraries(test_hybrid_accuracy PRIVATE sdflib)
+add_test(NAME hybrid_accuracy_test COMMAND test_hybrid_accuracy)
 
 # Output configuration info
 message(STATUS "========================================")

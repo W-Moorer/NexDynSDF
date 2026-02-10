@@ -6,6 +6,9 @@
 #include <sdflib/SdfFunction.h>
 #include <sdflib/OctreeSdf.h>
 #include <sdflib/ExactOctreeSdf.h>
+#include <sdflib/HybridOctreeSdf.h>
+#include <sdflib/utils/NagataEnhanced.h>
+#include <sdflib/utils/MeshBinaryLoader.h>
 #include <sdflib/utils/Mesh.h>
 #include <sdflib/utils/Timer.h>
 #include <spdlog/spdlog.h>
@@ -23,7 +26,7 @@ void printUsage(const char* programName)
               << "  --depth <n>              Octree depth (default: 8)\n"
               << "  --start_depth <n>        Start depth (default: 1)\n"
               << "  --algorithm <type>       Algorithm: continuity, no_continuity, uniform (default: continuity)\n"
-              << "  --sdf_format <format>    SDF format: octree, exact_octree (default: octree)\n"
+              << "  --sdf_format <format>    SDF format: octree, exact_octree, hybrid (default: octree)\n"
               << "  --termination <threshold> Termination threshold (default: 1e-3)\n"
               << "  --num_threads <n>        Number of threads (default: 1)\n"
               << "  --help                   Show this help message\n";
@@ -139,30 +142,31 @@ int main(int argc, char** argv)
     SPDLOG_INFO("Termination threshold: {}", opts.terminationThreshold);
     SPDLOG_INFO("Threads: {}", opts.numThreads);
 
-    // Load mesh
     sdflib::Timer timer;
-    SPDLOG_INFO("Loading mesh...");
-
-    sdflib::Mesh mesh(opts.inputFile);
-    if (mesh.getVertices().empty())
-    {
-        SPDLOG_ERROR("Failed to load mesh");
-        return 1;
-    }
-
-    SPDLOG_INFO("Mesh loaded in {} ms", timer.getElapsedMilliseconds());
-
-    // Get bounding box with margin
-    sdflib::BoundingBox box = mesh.getBoundingBox();
-    box.addMargin(0.1f * box.getSize().x); // Add 10% margin
-
     // Build SDF
     timer.start();
     std::unique_ptr<sdflib::SdfFunction> sdf;
+    sdflib::BoundingBox box;
+    sdflib::Mesh mesh;
 
     if (opts.sdfFormat == "octree")
     {
         SPDLOG_INFO("Building Octree SDF...");
+        
+        // Load mesh
+        SPDLOG_INFO("Loading mesh...");
+        mesh = sdflib::Mesh(opts.inputFile);
+        if (mesh.getVertices().empty())
+        {
+            SPDLOG_ERROR("Failed to load mesh");
+            return 1;
+        }
+        SPDLOG_INFO("Mesh loaded in {} ms", timer.getElapsedMilliseconds());
+
+        // Get bounding box with margin
+        box = mesh.getBoundingBox();
+        box.addMargin(0.1f * box.getSize().x); // Add 10% margin
+
         sdf = std::make_unique<sdflib::OctreeSdf>(
             mesh, box, opts.depth, opts.startDepth,
             opts.terminationThreshold, opts.algorithm, opts.numThreads);
@@ -170,8 +174,113 @@ int main(int argc, char** argv)
     else if (opts.sdfFormat == "exact_octree")
     {
         SPDLOG_INFO("Building Exact Octree SDF...");
+        
+        // Load mesh
+        SPDLOG_INFO("Loading mesh...");
+        mesh = sdflib::Mesh(opts.inputFile);
+        if (mesh.getVertices().empty())
+        {
+            SPDLOG_ERROR("Failed to load mesh");
+            return 1;
+        }
+        SPDLOG_INFO("Mesh loaded in {} ms", timer.getElapsedMilliseconds());
+
+        // Get bounding box with margin
+        box = mesh.getBoundingBox();
+        box.addMargin(0.1f * box.getSize().x); // Add 10% margin
+
         sdf = std::make_unique<sdflib::ExactOctreeSdf>(
             mesh, box, opts.depth, opts.startDepth, 32, opts.numThreads);
+    }
+    else if (opts.sdfFormat == "hybrid")
+    {
+        SPDLOG_INFO("Building Hybrid Octree SDF (Nagata build + fast query)...");
+        
+        std::vector<sdflib::NagataPatch::NagataPatchData> patches;
+        std::vector<sdflib::NagataPatch::PatchEnhancementData> enhanced;
+
+        // Specialized loading for Hybrid (similar to Nagata)
+        std::string ext = fs::path(opts.inputFile).extension().string();
+        if (ext == ".nsm")
+        {
+            SPDLOG_INFO("Loading NSM file...");
+            auto meshData = sdflib::MeshBinaryLoader::loadFromNSM(opts.inputFile);
+            if (meshData.vertices.empty())
+            {
+                SPDLOG_ERROR("Failed to load NSM data");
+                return 1;
+            }
+
+            // 1. Create Nagata Patches
+            patches = sdflib::MeshBinaryLoader::createNagataPatchData(meshData);
+            
+            // 2. Compute Enhanced Nagata Data (crease detection + c_sharp coefficients)
+            sdflib::NagataEnhanced::EnhancedNagataData enhancedData = 
+                sdflib::NagataEnhanced::computeOrLoadEnhancedData(
+                    meshData.vertices, meshData.faces, meshData.faceNormals, opts.inputFile);
+            
+            SPDLOG_INFO("Detected {} crease edges", enhancedData.c_sharps.size());
+            
+            // 3. Convert EnhancedNagataData to PatchEnhancementData vector
+            // Note: PatchEnhancementData is a simpler format used by NagataTrianglesInfluenceForBuild
+            enhanced.resize(patches.size());
+
+            size_t enabledEdgesTotal = 0;
+            for (size_t i = 0; i < meshData.faces.size() && i < enhanced.size(); ++i)
+            {
+                const auto& face = meshData.faces[i];
+                auto& pe = enhanced[i];
+
+                auto setEdge = [&](int edgeIdx, uint32_t a, uint32_t b)
+                {
+                    const sdflib::NagataEnhanced::EdgeKey key(a, b);
+                    if (!enhancedData.hasEdge(key)) return;
+
+                    pe.edges[edgeIdx].enabled = true;
+                    pe.edges[edgeIdx].c_sharp = enhancedData.getCSharpOriented(a, b);
+                    pe.edges[edgeIdx].d0 = 0.1f;
+                    pe.edges[edgeIdx].inv_d0 = 1.0f / pe.edges[edgeIdx].d0;
+                    enabledEdgesTotal++;
+                };
+
+                setEdge(0, face[0], face[1]);
+                setEdge(1, face[1], face[2]);
+                setEdge(2, face[0], face[2]);
+            }
+
+            SPDLOG_INFO("Enabled {} crease-edges on patches (total)", enabledEdgesTotal);
+            
+            // 4. Create mesh object for Octree structure
+            std::vector<uint32_t> flattenedIndices;
+            flattenedIndices.reserve(meshData.faces.size() * 3);
+            for (const auto& face : meshData.faces) {
+                flattenedIndices.push_back(face[0]);
+                flattenedIndices.push_back(face[1]);
+                flattenedIndices.push_back(face[2]);
+            }
+
+            mesh = sdflib::Mesh(std::move(meshData.vertices), std::move(flattenedIndices));
+
+            // Get bounding box
+            box = mesh.getBoundingBox();
+            box.addMargin(0.1f * box.getSize().x);
+
+            SPDLOG_INFO("Building with {} Nagata patches and {} crease edges", 
+                        patches.size(), enhancedData.c_sharps.size());
+
+            // 5. Build Hybrid Octree
+            sdf = std::make_unique<sdflib::HybridOctreeSdf>(
+                mesh, patches, enhanced, 
+                box, opts.depth, opts.startDepth,
+                sdflib::OctreeSdf::TerminationRule::TRAPEZOIDAL_RULE,
+                sdflib::OctreeSdf::TerminationRuleParams::setTrapezoidalRuleParams(opts.terminationThreshold),
+                opts.numThreads);
+        }
+        else
+        {
+            SPDLOG_ERROR("Hybrid SDF currently only supports .nsm files");
+            return 1;
+        }
     }
     else
     {

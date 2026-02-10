@@ -4,6 +4,7 @@
  */
 
 #include "sdflib/utils/Mesh.h"
+#include "sdflib/utils/MeshBinaryLoader.h"
 #include <spdlog/spdlog.h>
 #include <fstream>
 #include <sstream>
@@ -29,6 +30,32 @@ Mesh::Mesh(const std::string& filePath)
     {
         success = parseOBJ(filePath);
     }
+    else if (ext == "nsm")
+    {
+        SPDLOG_INFO("Loading NSM file: {}", filePath);
+        auto meshData = MeshBinaryLoader::loadFromNSM(filePath);
+        if (!meshData.vertices.empty())
+        {
+            mVertices = std::move(meshData.vertices);
+            
+            // Flatten faces to indices
+            mIndices.reserve(meshData.faces.size() * 3);
+            for (const auto& face : meshData.faces)
+            {
+                mIndices.push_back(face[0]);
+                mIndices.push_back(face[1]);
+                mIndices.push_back(face[2]);
+            }
+            
+            computeBoundingBox();
+            
+            // Note: faceNormals are ignored here as Mesh class usually holds vertex normals.
+            // computeNormals() if needed, but Nagata logic uses data from NSM loader directly.
+            computeNormals(); 
+            
+            success = true;
+        }
+    }
     else
     {
         SPDLOG_ERROR("Unsupported file format: {}", ext);
@@ -51,6 +78,13 @@ Mesh::Mesh(glm::vec3* vertices, uint32_t numVertices,
     std::memcpy(mIndices.data(), indices, sizeof(uint32_t) * numIndices);
     
     computeBoundingBox();
+}
+
+Mesh::Mesh(std::vector<glm::vec3>&& vertices, std::vector<uint32_t>&& indices)
+    : mVertices(std::move(vertices)), mIndices(std::move(indices))
+{
+    computeBoundingBox();
+    computeNormals();
 }
 
 bool Mesh::parseVTP(const std::string& filePath)

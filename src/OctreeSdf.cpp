@@ -14,6 +14,7 @@
 #include "sdflib/OctreeSdfBreadthFirstNoDelay.h"
 #include <array>
 #include <stack>
+#include <cstdlib>
 
 namespace sdflib
 {
@@ -105,7 +106,10 @@ float OctreeSdf::getDistance(glm::vec3 sample) const
        startArrayPos.y < 0 || startArrayPos.y >= mStartGridSize ||
        startArrayPos.z < 0 || startArrayPos.z >= mStartGridSize)
     {
-        return mBox.getDistance(sample) + mMinBorderValue;
+        const glm::vec3 size = mBox.getSize();
+        const float maxDim = glm::max(size.x, glm::max(size.y, size.z));
+        const float minBorderOffset = 1e-4f * maxDim;
+        return mBox.getDistance(sample) + glm::max(mMinBorderValue, minBorderOffset);
     }
 
     const OctreeNode* currentNode = &mOctreeData[startArrayPos.z * mStartGridXY + startArrayPos.y * mStartGridSize + startArrayPos.x];
@@ -135,7 +139,10 @@ float OctreeSdf::getDistance(glm::vec3 sample, glm::vec3& outGradient) const
        startArrayPos.y < 0 || startArrayPos.y >= mStartGridSize ||
        startArrayPos.z < 0 || startArrayPos.z >= mStartGridSize)
     {
-        return mBox.getDistance(sample, outGradient) + mMinBorderValue;
+        const glm::vec3 size = mBox.getSize();
+        const float maxDim = glm::max(size.x, glm::max(size.y, size.z));
+        const float minBorderOffset = 1e-4f * maxDim;
+        return mBox.getDistance(sample, outGradient) + glm::max(mMinBorderValue, minBorderOffset);
     }
 
     const OctreeNode* currentNode = &mOctreeData[startArrayPos.z * mStartGridXY + startArrayPos.y * mStartGridSize + startArrayPos.x];
@@ -156,9 +163,94 @@ float OctreeSdf::getDistance(glm::vec3 sample, glm::vec3& outGradient) const
     return InterpolationMethod::interpolateValue(values, fracPart);
 }
 
+OctreeSdf::QueryDebugInfo OctreeSdf::debugQuery(glm::vec3 sample) const
+{
+    QueryDebugInfo info;
+
+    glm::vec3 fracPart = (sample - mBox.min) / mStartGridCellSize;
+    glm::ivec3 startArrayPos = glm::floor(fracPart);
+    fracPart = glm::fract(fracPart);
+
+    info.startArrayPos = startArrayPos;
+    info.fracPart = fracPart;
+
+    if(startArrayPos.x < 0 || startArrayPos.x >= mStartGridSize ||
+       startArrayPos.y < 0 || startArrayPos.y >= mStartGridSize ||
+       startArrayPos.z < 0 || startArrayPos.z >= mStartGridSize)
+    {
+        info.outsideStartGrid = true;
+        const glm::vec3 size = mBox.getSize();
+        const float maxDim = glm::max(size.x, glm::max(size.y, size.z));
+        const float minBorderOffset = 1e-4f * maxDim;
+        info.value = mBox.getDistance(sample) + glm::max(mMinBorderValue, minBorderOffset);
+        return info;
+    }
+
+    const uint32_t startIdx = startArrayPos.z * mStartGridXY + startArrayPos.y * mStartGridSize + startArrayPos.x;
+    const OctreeNode* currentNode = &mOctreeData[startIdx];
+    uint32_t currentIdx = startIdx;
+    glm::vec3 leafMin = mBox.min + glm::vec3(startArrayPos) * mStartGridCellSize;
+    float leafSize = mStartGridCellSize;
+
+    while(!currentNode->isLeaf())
+    {
+        const uint32_t childIdx = (roundFloat(fracPart.z) << 2) +
+                                  (roundFloat(fracPart.y) << 1) +
+                                   roundFloat(fracPart.x);
+
+        leafSize *= 0.5f;
+        leafMin.x += leafSize * static_cast<float>(childIdx & 1);
+        leafMin.y += leafSize * static_cast<float>((childIdx >> 1) & 1);
+        leafMin.z += leafSize * static_cast<float>((childIdx >> 2) & 1);
+
+        currentIdx = currentNode->getChildrenIndex() + childIdx;
+        currentNode = &mOctreeData[currentIdx];
+        fracPart = glm::fract(2.0f * fracPart);
+    }
+
+    info.leafNodeIndex = currentIdx;
+    info.coeffIndex = currentNode->getChildrenIndex();
+    info.fracPart = fracPart;
+    info.leafMin = leafMin;
+    info.leafSize = leafSize;
+
+    auto& values = *reinterpret_cast<const std::array<float, InterpolationMethod::NUM_COEFFICIENTS>*>(&mOctreeData[info.coeffIndex]);
+    info.value = InterpolationMethod::interpolateValue(values, fracPart);
+
+    for (uint32_t i = 0; i < InterpolationMethod::NUM_COEFFICIENTS; i++)
+    {
+        info.coefficients[i] = values[i];
+    }
+
+    const std::array<glm::vec3, 8> corners =
+    {
+        glm::vec3(0.0f, 0.0f, 0.0f),
+        glm::vec3(1.0f, 0.0f, 0.0f),
+        glm::vec3(0.0f, 1.0f, 0.0f),
+        glm::vec3(1.0f, 1.0f, 0.0f),
+        glm::vec3(0.0f, 0.0f, 1.0f),
+        glm::vec3(1.0f, 0.0f, 1.0f),
+        glm::vec3(0.0f, 1.0f, 1.0f),
+        glm::vec3(1.0f, 1.0f, 1.0f)
+    };
+
+    for (uint32_t i = 0; i < 8; i++)
+    {
+        info.cornerValues[i] = InterpolationMethod::interpolateValue(values, corners[i]);
+    }
+
+    return info;
+}
+
 
 void OctreeSdf::computeMinBorderValue()
 {
+    const bool dbgBorder = (std::getenv("NEXDYN_SDF_DEBUG_BORDER") != nullptr);
+    float dbgBestValue = INFINITY;
+    glm::vec3 dbgBestSp(0.0f);
+    uint32_t dbgBestNode = std::numeric_limits<uint32_t>::max();
+    uint32_t dbgBestCorner = std::numeric_limits<uint32_t>::max();
+
     const std::array<glm::vec3, 8> childrens = 
     {
         glm::vec3(-1.0f, -1.0f, -1.0f),
@@ -201,9 +293,15 @@ void OctreeSdf::computeMinBorderValue()
                 {
                     std::array<float, InterpolationMethod::NUM_COEFFICIENTS>* coeff = reinterpret_cast<std::array<float, InterpolationMethod::NUM_COEFFICIENTS>*>(
                                                                                             &mOctreeData[mOctreeData[nIdx].getChildrenIndex()]);
-                    minValue = glm::min(minValue, InterpolationMethod::interpolateValue(*coeff, 0.5f * childrens[i] + glm::vec3(0.5f)));
-
-                    float val = InterpolationMethod::interpolateValue(*coeff, 0.5f * childrens[i] + glm::vec3(0.5f));
+                    const float val = InterpolationMethod::interpolateValue(*coeff, 0.5f * childrens[i] + glm::vec3(0.5f));
+                    minValue = glm::min(minValue, val);
+                    if (dbgBorder && val < dbgBestValue)
+                    {
+                        dbgBestValue = val;
+                        dbgBestSp = sp;
+                        dbgBestNode = nIdx;
+                        dbgBestCorner = i;
+                    }
                 }
             }
 
@@ -232,6 +330,17 @@ void OctreeSdf::computeMinBorderValue()
     }
 
     mMinBorderValue = minValue;
+
+    if (dbgBorder)
+    {
+        const glm::vec3 world = mBox.min + dbgBestSp * mBox.getSize();
+        SPDLOG_INFO("BorderDebug mMinBorderValue={} bestWorld=({:.6f},{:.6f},{:.6f}) bestSp=({:.6f},{:.6f},{:.6f}) node={} corner={}",
+                    mMinBorderValue,
+                    world.x, world.y, world.z,
+                    dbgBestSp.x, dbgBestSp.y, dbgBestSp.z,
+                    dbgBestNode,
+                    dbgBestCorner);
+    }
 }
 
 void OctreeSdf::getDepthDensity(std::vector<float>& depthsDensity)

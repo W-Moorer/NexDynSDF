@@ -218,6 +218,22 @@ public:
     float getDistance(glm::vec3 sample, glm::vec3& outGradient) const override;
 	SdfFunction::SdfFormat getFormat() const override { return SdfFunction::SdfFormat::OCTREE; }
 
+    struct QueryDebugInfo
+    {
+        bool outsideStartGrid = false;
+        glm::ivec3 startArrayPos = glm::ivec3(0);
+        uint32_t leafNodeIndex = 0;
+        uint32_t coeffIndex = 0;
+        glm::vec3 leafMin = glm::vec3(0.0f);
+        float leafSize = 0.0f;
+        glm::vec3 fracPart = glm::vec3(0.0f);
+        float value = 0.0f;
+        std::array<float, 8> cornerValues = {};
+        std::array<float, 64> coefficients = {};
+    };
+
+    QueryDebugInfo debugQuery(glm::vec3 sample) const;
+
     // Load and save function for storing the structure on disk
     template<class Archive>
     void save(Archive & archive) const
@@ -237,7 +253,7 @@ public:
         SPDLOG_INFO("Octree Sdf Total: {}MB", total/1048576.0f);
     } 
 
-private:
+protected:
     // Option to delay the node termination and recyle the distances already calculated
     static constexpr bool DELAY_NODE_TERMINATION = false;
 
@@ -276,6 +292,12 @@ private:
     void initOctreeWithContinuity(const Mesh& mesh, uint32_t startDepth, uint32_t maxDepth,
                                   TerminationRule terminationRule,
                                   TerminationRuleParams terminationRuleParams);
+
+    template<typename TrianglesInfluenceStrategy>
+    void initOctreeWithContinuity(const Mesh& mesh, uint32_t startDepth, uint32_t maxDepth,
+                                  TerminationRule terminationRule,
+                                  TerminationRuleParams terminationRuleParams,
+                                  TrianglesInfluenceStrategy& trianglesInfluence);
 
     template<typename TrianglesInfluenceStrategy>
     void initOctreeWithContinuityNoDelay(const Mesh& mesh, uint32_t startDepth, uint32_t maxDepth,
