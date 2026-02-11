@@ -5,7 +5,6 @@
 #include "utils/TriangleUtils.h"
 #include "utils/NagataPatch.h"
 #include "utils/GJK.h"
-#include "utils/WindingNumberOracle.h"
 #include "InterpolationMethods.h"
 
 #include <vector>
@@ -19,10 +18,10 @@
 #include <cstdlib>
 #include <sstream>
 #include <string>
+#include <cstdint>
 #include <unordered_map>
 #include <mutex>
 #include <memory>
-#include <cstdint>
 #include <spdlog/spdlog.h>
 
 namespace sdflib
@@ -49,6 +48,7 @@ struct NagataTrianglesInfluenceForBuild
     // Nagata data (passed at construction)
     std::vector<NagataPatch::NagataPatchData> mPatches;
     std::vector<NagataPatch::PatchEnhancementData> mEnhancedData;
+    bool mHasCreaseEdges = false;
     
     // Statistics (for debugging)
     uint32_t gjkIter = 0;
@@ -115,127 +115,7 @@ struct NagataTrianglesInfluenceForBuild
         return cfg;
     }
 
-    inline static bool rayParityInsideWithDir(glm::vec3 point, const Mesh& mesh, const glm::vec3& dir, float salt)
-    {
-        const std::vector<glm::vec3>& vertices = mesh.getVertices();
-        const std::vector<uint32_t>& indices = mesh.getIndices();
 
-        glm::vec3 d = glm::normalize(dir);
-
-        float h = std::sin(point.x * 12.9898f + point.y * 78.233f + point.z * 37.719f + salt) * 43758.5453f;
-        float frac = h - std::floor(h);
-        glm::vec3 jitter = glm::normalize(glm::vec3(0.123f, 0.456f, 0.789f) + frac * glm::vec3(0.31f, 0.17f, 0.23f));
-        glm::vec3 o = point + 1.0e-4f * jitter;
-
-        uint32_t hits = 0;
-        const float eps = 1.0e-8f;
-
-        const size_t triCount = indices.size() / 3;
-        for (size_t t = 0; t < triCount; t++)
-        {
-            const glm::vec3 a = vertices[indices[3 * t]];
-            const glm::vec3 b = vertices[indices[3 * t + 1]];
-            const glm::vec3 c = vertices[indices[3 * t + 2]];
-
-            const glm::vec3 e1 = b - a;
-            const glm::vec3 e2 = c - a;
-            const glm::vec3 pvec = glm::cross(d, e2);
-            const float det = glm::dot(e1, pvec);
-            if (std::abs(det) <= eps) continue;
-
-            const float invDet = 1.0f / det;
-            const glm::vec3 tvec = o - a;
-            const float u = glm::dot(tvec, pvec) * invDet;
-            if (u < 0.0f || u > 1.0f) continue;
-
-            const glm::vec3 qvec = glm::cross(tvec, e1);
-            const float v = glm::dot(d, qvec) * invDet;
-            if (v < 0.0f || (u + v) > 1.0f) continue;
-
-            const float tHit = glm::dot(e2, qvec) * invDet;
-            if (tHit > eps) hits++;
-        }
-
-        return (hits & 1u) == 1u;
-    }
-
-    inline static bool rayParityInside(glm::vec3 point, const Mesh& mesh)
-    {
-        return rayParityInsideWithDir(point, mesh, glm::vec3(0.852f, 0.231f, 0.468f), 0.0f);
-    }
-
-    inline static std::shared_ptr<const WindingNumberOracle> windingOracleForMesh(const Mesh& mesh)
-    {
-        const auto vPtr = reinterpret_cast<std::uintptr_t>(mesh.getVertices().data());
-        const auto iPtr = reinterpret_cast<std::uintptr_t>(mesh.getIndices().data());
-        const uint64_t key =
-            static_cast<uint64_t>(vPtr) ^
-            (static_cast<uint64_t>(iPtr) << 1) ^
-            (static_cast<uint64_t>(mesh.getVertices().size()) * 0x9e3779b97f4a7c15ULL) ^
-            (static_cast<uint64_t>(mesh.getIndices().size()) * 0xbf58476d1ce4e5b9ULL);
-
-        thread_local uint64_t tlKey = 0;
-        thread_local std::shared_ptr<const WindingNumberOracle> tlOracle;
-        if (tlOracle && tlKey == key)
-        {
-            return tlOracle;
-        }
-
-        static std::mutex m;
-        static std::unordered_map<uint64_t, std::weak_ptr<const WindingNumberOracle>> cache;
-
-        std::lock_guard<std::mutex> lock(m);
-        auto it = cache.find(key);
-        if (it != cache.end())
-        {
-            if (auto alive = it->second.lock())
-            {
-                tlKey = key;
-                tlOracle = alive;
-                return alive;
-            }
-        }
-
-        WindingNumberOracle::Settings settings;
-        settings.theta = 0.25;
-        settings.leafMaxTriangles = 8;
-
-        try
-        {
-            auto created = std::make_shared<WindingNumberOracle>(mesh.getVertices(), mesh.getIndices(), settings);
-            cache[key] = created;
-            tlKey = key;
-            tlOracle = created;
-            return created;
-        }
-        catch (...)
-        {
-            cache.erase(key);
-            return nullptr;
-        }
-    }
-
-    inline static bool robustInside(glm::vec3 point, const Mesh& mesh)
-    {
-        const bool a = rayParityInsideWithDir(point, mesh, glm::vec3(0.852f, 0.231f, 0.468f), 0.0f);
-        const bool b = rayParityInsideWithDir(point, mesh, glm::vec3(-0.217f, 0.931f, 0.293f), 19.19f);
-        const bool c = rayParityInsideWithDir(point, mesh, glm::vec3(0.381f, -0.128f, 0.916f), 37.37f);
-
-        if ((a == b) && (b == c))
-        {
-            return a;
-        }
-
-        const auto oracle = windingOracleForMesh(mesh);
-        if (oracle)
-        {
-            return oracle->inside(point);
-        }
-
-        const int votes = static_cast<int>(a) + static_cast<int>(b) + static_cast<int>(c);
-        return votes >= 2;
-    }
-    
     /**
      * @brief Constructor
      * @param patches Nagata patch data for all triangles
@@ -250,7 +130,292 @@ struct NagataTrianglesInfluenceForBuild
         {
             throw std::runtime_error("Nagata patches and enhancement data size mismatch");
         }
+
+        for (const auto& e : mEnhancedData)
+        {
+            if (e.edges[0].enabled || e.edges[1].enabled || e.edges[2].enabled)
+            {
+                mHasCreaseEdges = true;
+                break;
+            }
+        }
     }
+
+    struct EdgeAdjCache
+    {
+        std::vector<std::array<uint32_t, 3>> neighbors;
+    };
+
+    inline static uint64_t edgeKey(uint32_t a, uint32_t b)
+    {
+        const uint32_t lo = glm::min(a, b);
+        const uint32_t hi = glm::max(a, b);
+        return (static_cast<uint64_t>(lo) << 32) | static_cast<uint64_t>(hi);
+    }
+
+    inline static std::shared_ptr<EdgeAdjCache> getOrBuildAdjCache(const Mesh& mesh)
+    {
+        static std::mutex mtx;
+        static std::unordered_map<const Mesh*, std::weak_ptr<EdgeAdjCache>> cache;
+
+        std::lock_guard<std::mutex> lock(mtx);
+        auto it = cache.find(&mesh);
+        if (it != cache.end())
+        {
+            if (auto sp = it->second.lock()) return sp;
+        }
+
+        auto sp = std::make_shared<EdgeAdjCache>();
+        const auto& indices = mesh.getIndices();
+        const uint32_t triCount = static_cast<uint32_t>(indices.size() / 3u);
+        sp->neighbors.assign(triCount, {std::numeric_limits<uint32_t>::max(),
+                                        std::numeric_limits<uint32_t>::max(),
+                                        std::numeric_limits<uint32_t>::max()});
+
+        std::unordered_map<uint64_t, std::pair<uint32_t, uint8_t>> first;
+        first.reserve(triCount * 3u);
+
+        for (uint32_t t = 0; t < triCount; ++t)
+        {
+            const uint32_t i0 = indices[3u * t];
+            const uint32_t i1 = indices[3u * t + 1u];
+            const uint32_t i2 = indices[3u * t + 2u];
+
+            const std::array<std::pair<uint32_t, uint32_t>, 3> edges = {
+                std::make_pair(i0, i1),
+                std::make_pair(i1, i2),
+                std::make_pair(i0, i2)};
+
+            for (uint8_t e = 0; e < 3u; ++e)
+            {
+                const uint64_t k = edgeKey(edges[e].first, edges[e].second);
+                auto jt = first.find(k);
+                if (jt == first.end())
+                {
+                    first.emplace(k, std::make_pair(t, e));
+                    continue;
+                }
+
+                const uint32_t ot = jt->second.first;
+                const uint8_t oe = jt->second.second;
+                if (ot == t) continue;
+
+                if (sp->neighbors[t][e] == std::numeric_limits<uint32_t>::max() &&
+                    sp->neighbors[ot][oe] == std::numeric_limits<uint32_t>::max())
+                {
+                    sp->neighbors[t][e] = ot;
+                    sp->neighbors[ot][oe] = t;
+                }
+            }
+        }
+
+        cache[&mesh] = sp;
+        return sp;
+    }
+
+    inline bool tryComputeCreaseSignNormal(
+        const Mesh& mesh,
+        const EdgeAdjCache& adj,
+        uint32_t triIdx,
+        float u,
+        float v,
+        glm::vec3& outNormal) const
+    {
+        const float uvEps = 1.0e-5f;
+        const float d0 = v;
+        const float d1 = 1.0f - u;
+        const float d2 = u - v;
+
+        uint32_t edge = 0;
+        float dmin = d0;
+        if (d1 < dmin) { dmin = d1; edge = 1; }
+        if (d2 < dmin) { dmin = d2; edge = 2; }
+
+        if (dmin > uvEps) return false;
+        if (!mEnhancedData[triIdx].edges[edge].enabled) return false;
+        if (triIdx >= adj.neighbors.size()) return false;
+
+        const uint32_t nbTri = adj.neighbors[triIdx][edge];
+        if (nbTri == std::numeric_limits<uint32_t>::max()) return false;
+        if (nbTri >= mPatches.size()) return false;
+
+        uint32_t aLocal = 0, bLocal = 1;
+        float t = 0.0f;
+        if (edge == 0u)
+        {
+            aLocal = 0u; bLocal = 1u; t = u;
+        }
+        else if (edge == 1u)
+        {
+            aLocal = 1u; bLocal = 2u; t = v;
+        }
+        else
+        {
+            aLocal = 0u; bLocal = 2u; t = u;
+        }
+
+        t = glm::clamp(t, 0.0f, 1.0f);
+
+        const auto& indices = mesh.getIndices();
+        const uint32_t base = 3u * triIdx;
+        const uint32_t nbBase = 3u * nbTri;
+        if (base + 2u >= indices.size()) return false;
+        if (nbBase + 2u >= indices.size()) return false;
+
+        const uint32_t g0 = indices[base];
+        const uint32_t g1 = indices[base + 1u];
+        const uint32_t g2 = indices[base + 2u];
+        const std::array<uint32_t, 3> gv = {g0, g1, g2};
+        const uint32_t ga = gv[aLocal];
+        const uint32_t gb = gv[bLocal];
+
+        auto findLocal = [&](uint32_t tri, uint32_t g) -> int
+        {
+            const uint32_t b = 3u * tri;
+            if (indices[b] == g) return 0;
+            if (indices[b + 1u] == g) return 1;
+            if (indices[b + 2u] == g) return 2;
+            return -1;
+        };
+
+        const int aNbLocal = findLocal(nbTri, ga);
+        const int bNbLocal = findLocal(nbTri, gb);
+        if (aNbLocal < 0 || bNbLocal < 0) return false;
+
+        glm::vec3 nA_L = mPatches[triIdx].normals[aLocal];
+        glm::vec3 nB_L = mPatches[triIdx].normals[bLocal];
+        glm::vec3 nA_R = mPatches[nbTri].normals[static_cast<uint32_t>(aNbLocal)];
+        glm::vec3 nB_R = mPatches[nbTri].normals[static_cast<uint32_t>(bNbLocal)];
+
+        auto safeNormalize = [](glm::vec3 n) -> glm::vec3
+        {
+            const float lenSq = glm::dot(n, n);
+            if (std::isfinite(n.x) && std::isfinite(n.y) && std::isfinite(n.z) && lenSq > 1.0e-12f)
+            {
+                return n / std::sqrt(lenSq);
+            }
+            return glm::vec3(0.0f);
+        };
+
+        nA_L = safeNormalize(nA_L);
+        nB_L = safeNormalize(nB_L);
+        nA_R = safeNormalize(nA_R);
+        nB_R = safeNormalize(nB_R);
+        if (glm::dot(nA_L, nA_L) <= 0.0f || glm::dot(nB_L, nB_L) <= 0.0f ||
+            glm::dot(nA_R, nA_R) <= 0.0f || glm::dot(nB_R, nB_R) <= 0.0f)
+        {
+            return false;
+        }
+
+        if (glm::dot(nA_L, nA_R) < 0.0f) nA_R = -nA_R;
+        if (glm::dot(nB_L, nB_R) < 0.0f) nB_R = -nB_R;
+
+        const glm::vec3 nA = safeNormalize((1.0f - t) * nA_L + t * nA_R);
+        const glm::vec3 nB = safeNormalize((1.0f - t) * nB_L + t * nB_R);
+        const glm::vec3 sum = nA + nB;
+        const glm::vec3 nRef = safeNormalize(sum);
+        if (glm::dot(nRef, nRef) <= 0.0f) return false;
+
+        outNormal = nRef;
+        return true;
+    }
+
+    inline bool tryComputeCreaseRefNormalFromLinearOwner(
+        const Mesh& mesh,
+        const EdgeAdjCache& adj,
+        uint32_t triIdx,
+        uint8_t edge,
+        float t,
+        glm::vec3& outNormal) const
+    {
+        if (edge >= 3u) return false;
+        if (!mEnhancedData[triIdx].edges[edge].enabled) return false;
+        if (triIdx >= adj.neighbors.size()) return false;
+
+        const uint32_t nbTri = adj.neighbors[triIdx][edge];
+        if (nbTri == std::numeric_limits<uint32_t>::max()) return false;
+        if (nbTri >= mPatches.size()) return false;
+
+        uint32_t aLocal = 0u, bLocal = 1u;
+        if (edge == 0u)
+        {
+            aLocal = 0u; bLocal = 1u;
+        }
+        else if (edge == 1u)
+        {
+            aLocal = 1u; bLocal = 2u;
+        }
+        else
+        {
+            aLocal = 0u; bLocal = 2u;
+        }
+
+        t = glm::clamp(t, 0.0f, 1.0f);
+
+        const auto& indices = mesh.getIndices();
+        const uint32_t base = 3u * triIdx;
+        const uint32_t nbBase = 3u * nbTri;
+        if (base + 2u >= indices.size()) return false;
+        if (nbBase + 2u >= indices.size()) return false;
+
+        const uint32_t g0 = indices[base];
+        const uint32_t g1 = indices[base + 1u];
+        const uint32_t g2 = indices[base + 2u];
+        const std::array<uint32_t, 3> gv = {g0, g1, g2};
+        const uint32_t ga = gv[aLocal];
+        const uint32_t gb = gv[bLocal];
+
+        auto findLocal = [&](uint32_t tri, uint32_t g) -> int
+        {
+            const uint32_t b = 3u * tri;
+            if (indices[b] == g) return 0;
+            if (indices[b + 1u] == g) return 1;
+            if (indices[b + 2u] == g) return 2;
+            return -1;
+        };
+
+        const int aNbLocal = findLocal(nbTri, ga);
+        const int bNbLocal = findLocal(nbTri, gb);
+        if (aNbLocal < 0 || bNbLocal < 0) return false;
+
+        glm::vec3 nA_L = mPatches[triIdx].normals[aLocal];
+        glm::vec3 nB_L = mPatches[triIdx].normals[bLocal];
+        glm::vec3 nA_R = mPatches[nbTri].normals[static_cast<uint32_t>(aNbLocal)];
+        glm::vec3 nB_R = mPatches[nbTri].normals[static_cast<uint32_t>(bNbLocal)];
+
+        auto safeNormalize = [](glm::vec3 n) -> glm::vec3
+        {
+            const float lenSq = glm::dot(n, n);
+            if (std::isfinite(n.x) && std::isfinite(n.y) && std::isfinite(n.z) && lenSq > 1.0e-12f)
+            {
+                return n / std::sqrt(lenSq);
+            }
+            return glm::vec3(0.0f);
+        };
+
+        nA_L = safeNormalize(nA_L);
+        nB_L = safeNormalize(nB_L);
+        nA_R = safeNormalize(nA_R);
+        nB_R = safeNormalize(nB_R);
+        if (glm::dot(nA_L, nA_L) <= 0.0f || glm::dot(nB_L, nB_L) <= 0.0f ||
+            glm::dot(nA_R, nA_R) <= 0.0f || glm::dot(nB_R, nB_R) <= 0.0f)
+        {
+            return false;
+        }
+
+        if (glm::dot(nA_L, nA_R) < 0.0f) nA_R = -nA_R;
+        if (glm::dot(nB_L, nB_R) < 0.0f) nB_R = -nB_R;
+
+        const glm::vec3 nA = safeNormalize((1.0f - t) * nA_L + t * nA_R);
+        const glm::vec3 nB = safeNormalize((1.0f - t) * nB_L + t * nB_R);
+        const glm::vec3 sum = nA + nB;
+        const glm::vec3 nRef = safeNormalize(sum);
+        if (glm::dot(nRef, nRef) <= 0.0f) return false;
+
+        outNormal = nRef;
+        return true;
+    }
+
     
     /**
      * @brief Calculate vertex SDF values using Nagata patches
@@ -274,6 +439,34 @@ struct NagataTrianglesInfluenceForBuild
         for(size_t i=0; i < N; i++)
         {
             inPoints[i] = nodeCenter + pointsRelPos[i] * nodeHalfSize;
+        }
+
+        const auto& indices = mesh.getIndices();
+        const auto& vertices = mesh.getVertices();
+
+        std::unordered_map<uint32_t, std::vector<uint32_t>> vertexToTriangles;
+        std::unordered_map<uint64_t, std::vector<uint32_t>> edgeToTriangles;
+        vertexToTriangles.reserve(triangles.size() * 3u);
+        edgeToTriangles.reserve(triangles.size() * 3u);
+        for (uint32_t t : triangles)
+        {
+            const uint32_t base = 3u * t;
+            if (base + 2u >= indices.size()) continue;
+            const uint32_t i0 = indices[base];
+            const uint32_t i1 = indices[base + 1u];
+            const uint32_t i2 = indices[base + 2u];
+            vertexToTriangles[i0].push_back(t);
+            vertexToTriangles[i1].push_back(t);
+            vertexToTriangles[i2].push_back(t);
+            edgeToTriangles[edgeKey(i0, i1)].push_back(t);
+            edgeToTriangles[edgeKey(i1, i2)].push_back(t);
+            edgeToTriangles[edgeKey(i0, i2)].push_back(t);
+        }
+
+        std::shared_ptr<EdgeAdjCache> adjCache;
+        if (mHasCreaseEdges)
+        {
+            adjCache = getOrBuildAdjCache(mesh);
         }
 
         // 2. Initialize info
@@ -407,15 +600,80 @@ struct NagataTrianglesInfluenceForBuild
                 continue;
             }
 
+            uint32_t triOwnerLin = 0u;
+            float ownerMinDistSq = FLT_MAX;
+            for (uint32_t t : triangles)
+            {
+                const float distSq = TriangleUtils::getSqDistPointAndTriangle(inPoints[i], trianglesData[t]);
+                if (distSq < ownerMinDistSq)
+                {
+                    ownerMinDistSq = distSq;
+                    triOwnerLin = t;
+                }
+            }
+
+            const TriangleUtils::LinearClosestInfo ownerInfo =
+                TriangleUtils::getLinearClosestInfoPointAndTriangle(inPoints[i], trianglesData[triOwnerLin]);
+
+            std::vector<uint32_t> nagataCandidates = candidates[i];
+            if (std::find(nagataCandidates.begin(), nagataCandidates.end(), triOwnerLin) == nagataCandidates.end())
+            {
+                nagataCandidates.push_back(triOwnerLin);
+            }
+
+            const uint32_t ownerBase = 3u * triOwnerLin;
+            if (ownerBase + 2u < indices.size())
+            {
+                const uint32_t g0 = indices[ownerBase];
+                const uint32_t g1 = indices[ownerBase + 1u];
+                const uint32_t g2 = indices[ownerBase + 2u];
+
+                if (ownerInfo.entityType == TriangleUtils::ClosestEntityType::Vertex)
+                {
+                    const uint32_t gv = (ownerInfo.entityLocalId == 0u) ? g0 : (ownerInfo.entityLocalId == 1u ? g1 : g2);
+                    auto it = vertexToTriangles.find(gv);
+                    if (it != vertexToTriangles.end())
+                    {
+                        nagataCandidates.insert(nagataCandidates.end(), it->second.begin(), it->second.end());
+                    }
+                }
+                else if (ownerInfo.entityType == TriangleUtils::ClosestEntityType::Edge)
+                {
+                    uint32_t ga = g0, gb = g1;
+                    if (ownerInfo.entityLocalId == 0u)
+                    {
+                        ga = g0; gb = g1;
+                    }
+                    else if (ownerInfo.entityLocalId == 1u)
+                    {
+                        ga = g1; gb = g2;
+                    }
+                    else
+                    {
+                        ga = g0; gb = g2;
+                    }
+
+                    auto it = edgeToTriangles.find(edgeKey(ga, gb));
+                    if (it != edgeToTriangles.end())
+                    {
+                        nagataCandidates.insert(nagataCandidates.end(), it->second.begin(), it->second.end());
+                    }
+                }
+            }
+
+            std::sort(nagataCandidates.begin(), nagataCandidates.end());
+            nagataCandidates.erase(std::unique(nagataCandidates.begin(), nagataCandidates.end()), nagataCandidates.end());
+
             // Find best candidate using Nagata projection
             float minExactDistSq = 9.0e8f;
+            float secondExactDistSq = 9.0e8f;
             
             uint32_t bestTriIdx = 0;
             glm::vec3 bestNearestPt(0.0f);
             float bestU = 0.0f, bestV = 0.0f;
             bool foundValid = false;
 
-            for(uint32_t t : candidates[i])
+            for(uint32_t t : nagataCandidates)
             {
                 // PHASE 3: Smart Initialization
                 // Use flat triangle projection as initial guess for Newton solver
@@ -448,12 +706,17 @@ struct NagataTrianglesInfluenceForBuild
 
                 if (d2 < minExactDistSq)
                 {
+                    secondExactDistSq = minExactDistSq;
                     minExactDistSq = d2;
                     bestTriIdx = t;
                     bestNearestPt = result.nearestPoint;
                     bestU = result.parameter.x;
                     bestV = result.parameter.y;
                     foundValid = true;
+                }
+                else if (d2 < secondExactDistSq)
+                {
+                    secondExactDistSq = d2;
                 }
             }
             
@@ -511,50 +774,72 @@ struct NagataTrianglesInfluenceForBuild
                 mEnhancedData[bestTriIdx],
                 bestU, bestV,
                 dXdu, dXdv);
-            
-            glm::vec3 surfNormal = glm::normalize(glm::cross(dXdu, dXdv));
+
+            const glm::vec3 crossVec = glm::cross(dXdu, dXdv);
+            const float crossLen = glm::length(crossVec);
+
+            glm::vec3 refNormal = mPatches[bestTriIdx].normals[0] +
+                                  mPatches[bestTriIdx].normals[1] +
+                                  mPatches[bestTriIdx].normals[2];
+            const float refNormalLenSq = glm::dot(refNormal, refNormal);
+            const bool refOk = std::isfinite(refNormal.x) && std::isfinite(refNormal.y) && std::isfinite(refNormal.z) && refNormalLenSq > 1.0e-12f;
+            if (refOk) refNormal = refNormal / std::sqrt(refNormalLenSq);
+
+            glm::vec3 surfNormal(0.0f);
+            const bool crossOk = std::isfinite(crossVec.x) && std::isfinite(crossVec.y) && std::isfinite(crossVec.z) && crossLen > 1.0e-12f;
+            if (crossOk)
             {
-                const glm::vec3 ref = mPatches[bestTriIdx].normals[0] +
-                                      mPatches[bestTriIdx].normals[1] +
-                                      mPatches[bestTriIdx].normals[2];
-                if (!glm::isnan(ref.x + ref.y + ref.z))
-                {
-                    const float refLenSq = glm::dot(ref, ref);
-                    if (refLenSq > 1.0e-12f && glm::dot(surfNormal, ref) < 0.0f)
-                    {
-                        surfNormal = -surfNormal;
-                    }
-                }
+                surfNormal = crossVec / crossLen;
+                if (refOk && glm::dot(surfNormal, refNormal) < 0.0f) surfNormal = -surfNormal;
             }
-
-            float dotVal = glm::dot(diff, surfNormal);
-            float sign = (dotVal < 0.0f) ? -1.0f : 1.0f;
-
-            const float uvEps = 1.0e-5f;
-            const bool uvDegenerate = (bestU <= uvEps) || (bestV <= uvEps) || ((bestU - bestV) <= uvEps) ||
-                                      (bestU >= (1.0f - uvEps)) || (bestV >= (1.0f - uvEps));
-            const bool normalDegenerate = std::isnan(surfNormal.x + surfNormal.y + surfNormal.z) || (glm::length(surfNormal) <= 1.0e-6f);
-            const float dotEps = 1.0e-5f * glm::max(dist, 1.0f);
-            const bool dotDegenerate = std::abs(dotVal) <= dotEps;
-            const bool needOracle = uvDegenerate || normalDegenerate || dotDegenerate;
-
-            if (needOracle)
+            else if (refOk)
             {
-                const bool inside = robustInside(inPoints[i], mesh);
-                sign = inside ? -1.0f : 1.0f;
-            }
-            
-            glm::vec3 finalGradient;
-
-            if (dist > 1e-6f)
-            {
-                // Gradient = sign * normalize(diff)
-                finalGradient = sign * (diff / dist);
+                surfNormal = refNormal;
             }
             else
             {
-                // On surface, use surface normal
-                finalGradient = surfNormal;
+                surfNormal = glm::vec3(1.0f, 0.0f, 0.0f);
+            }
+
+            glm::vec3 stableRefNormal = ownerInfo.pseudoNormal;
+            if (adjCache && ownerInfo.entityType == TriangleUtils::ClosestEntityType::Edge)
+            {
+                glm::vec3 creaseRef(0.0f);
+                if (tryComputeCreaseRefNormalFromLinearOwner(mesh, *adjCache, triOwnerLin, ownerInfo.entityLocalId, ownerInfo.edgeT, creaseRef))
+                {
+                    if (glm::dot(creaseRef, stableRefNormal) < 0.0f) creaseRef = -creaseRef;
+                    stableRefNormal = creaseRef;
+                }
+            }
+
+            glm::vec3 nagataNormal = surfNormal;
+            const float nagataLenSq = glm::dot(nagataNormal, nagataNormal);
+            const bool nagataOk = std::isfinite(nagataNormal.x) && std::isfinite(nagataNormal.y) && std::isfinite(nagataNormal.z) && nagataLenSq > 1.0e-12f;
+            if (nagataOk && glm::dot(nagataNormal, stableRefNormal) < 0.0f) nagataNormal = -nagataNormal;
+
+            const float sign = ownerInfo.sign;
+            const float dotVal = ownerInfo.dotVal;
+            const float dotEps = 1.0e-5f * glm::max(ownerInfo.unsignedDist, 1.0f);
+
+            bool ambiguousMin = false;
+            if (secondExactDistSq < 8.0e8f)
+            {
+                const float gap = secondExactDistSq - minExactDistSq;
+                const float relGap = gap / glm::max(minExactDistSq, 1.0e-12f);
+                ambiguousMin = (relGap <= 1.0e-4f);
+            }
+
+            const bool dotDegenerate = (dotEps > 0.0f) ? (std::abs(dotVal) <= dotEps) : false;
+            const bool usePseudoGradient = dotDegenerate || ambiguousMin || !nagataOk;
+
+            glm::vec3 finalGradient(0.0f);
+            if (usePseudoGradient)
+            {
+                finalGradient = sign * stableRefNormal;
+            }
+            else
+            {
+                finalGradient = sign * nagataNormal;
             }
 
             // Sanitize Gradient
@@ -568,16 +853,16 @@ struct NagataTrianglesInfluenceForBuild
 
             if (dbgAllowLog)
             {
-                SPDLOG_INFO("NagataDebug vtx i={} proj tri={} u={:.6f} v={:.6f} dist={:.6f} dot={:.6f} sign={} oracle={} surfN=({:.6f},{:.6f},{:.6f}) diff=({:.6f},{:.6f},{:.6f})",
+                SPDLOG_INFO("NagataDebug vtx i={} proj tri={} u={:.6f} v={:.6f} dist={:.6f} linDot={:.6f} sign={} refN=({:.6f},{:.6f},{:.6f}) nagataN=({:.6f},{:.6f},{:.6f}) usePseudoGrad={}",
                             i,
                             bestTriIdx,
                             bestU, bestV,
                             dist,
                             dotVal,
                             sign,
-                            needOracle ? 1 : 0,
-                            surfNormal.x, surfNormal.y, surfNormal.z,
-                            diff.x, diff.y, diff.z);
+                            stableRefNormal.x, stableRefNormal.y, stableRefNormal.z,
+                            nagataNormal.x, nagataNormal.y, nagataNormal.z,
+                            usePseudoGradient);
             }
             
             // Sanitize Distance
@@ -646,7 +931,11 @@ struct NagataTrianglesInfluenceForBuild
     
     void printStatistics()
     {
-        // Optional: Add logging if needed
+        (void)gjkIter;
+        (void)gjkCallsInside;
+        (void)gjkIterHistogramInside;
+        (void)gjkCallsOutside;
+        (void)gjkIterHistogramOutside;
     }
 };
 

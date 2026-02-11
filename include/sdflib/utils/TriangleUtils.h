@@ -8,6 +8,7 @@
 #include <map>
 #include <unordered_map>
 #include <iostream>
+#include <cstdint>
 #include <spdlog/spdlog.h>
 #include <cereal/types/array.hpp>
 #include "Mesh.h"
@@ -146,6 +147,217 @@ namespace TriangleUtils
         }
 
         return projPoint.z * projPoint.z;
+    }
+
+    enum class ClosestEntityType : uint8_t
+    {
+        Vertex = 0,
+        Edge = 1,
+        Face = 2
+    };
+
+    struct LinearClosestInfo
+    {
+        ClosestEntityType entityType = ClosestEntityType::Face;
+        uint8_t entityLocalId = 0u;
+        float edgeT = 0.0f;
+        glm::vec3 nearestPoint = glm::vec3(0.0f);
+        glm::vec3 pseudoNormal = glm::vec3(0.0f, 0.0f, 1.0f);
+        float dotVal = 0.0f;
+        float unsignedDist = 0.0f;
+        float sign = 1.0f;
+    };
+
+    inline LinearClosestInfo getLinearClosestInfoPointAndTriangle(glm::vec3 point, const TriangleData& data)
+    {
+        LinearClosestInfo out;
+
+        const glm::vec3 projPoint = data.transform * (point - data.origin);
+
+        const float de1 = -projPoint.y;
+        const float de2 = (projPoint.x - data.v2) * data.b.y - projPoint.y * data.b.x;
+        const float de3 = projPoint.x * data.c.y - projPoint.y * data.c.x;
+
+        glm::vec3 nearestLocal(0.0f);
+        glm::vec3 nLocal(0.0f, 0.0f, 1.0f);
+        glm::vec3 dotVecLocal(0.0f);
+        float unsignedDistSq = 0.0f;
+
+        if (de1 >= 0.0f)
+        {
+            if (projPoint.x <= 0.0f)
+            {
+                out.entityType = ClosestEntityType::Vertex;
+                out.entityLocalId = 0u;
+                nearestLocal = glm::vec3(0.0f);
+                nLocal = data.verticesNormal[0];
+                dotVecLocal = projPoint;
+                unsignedDistSq = glm::dot(projPoint, projPoint);
+            }
+            else if (projPoint.x >= data.v2)
+            {
+                out.entityType = ClosestEntityType::Vertex;
+                out.entityLocalId = 1u;
+                nearestLocal = glm::vec3(data.v2, 0.0f, 0.0f);
+                nLocal = data.verticesNormal[1];
+                const glm::vec3 p = projPoint - nearestLocal;
+                dotVecLocal = p;
+                unsignedDistSq = glm::dot(p, p);
+            }
+            else
+            {
+                out.entityType = ClosestEntityType::Edge;
+                out.entityLocalId = 0u;
+                out.edgeT = (data.v2 > 1.0e-12f) ? glm::clamp(projPoint.x / data.v2, 0.0f, 1.0f) : 0.0f;
+                nearestLocal = glm::vec3(projPoint.x, 0.0f, 0.0f);
+                nLocal = data.edgesNormal[0];
+                dotVecLocal = projPoint;
+                unsignedDistSq = de1 * de1 + projPoint.z * projPoint.z;
+            }
+        }
+        else if (de2 >= 0.0f)
+        {
+            const float t2 = (projPoint.x - data.v2) * data.b.x + projPoint.y * data.b.y;
+            if (t2 <= 0.0f)
+            {
+                out.entityType = ClosestEntityType::Vertex;
+                out.entityLocalId = 1u;
+                nearestLocal = glm::vec3(data.v2, 0.0f, 0.0f);
+                nLocal = data.verticesNormal[1];
+                const glm::vec3 p = projPoint - nearestLocal;
+                dotVecLocal = p;
+                unsignedDistSq = glm::dot(p, p);
+            }
+            else
+            {
+                const float t3 = (projPoint.x - data.v3.x) * data.b.x + (projPoint.y - data.v3.y) * data.b.y;
+                if (t3 >= 0.0f)
+                {
+                    out.entityType = ClosestEntityType::Vertex;
+                    out.entityLocalId = 2u;
+                    nearestLocal = glm::vec3(data.v3.x, data.v3.y, 0.0f);
+                    nLocal = data.verticesNormal[2];
+                    const glm::vec3 p = projPoint - nearestLocal;
+                    dotVecLocal = p;
+                    unsignedDistSq = glm::dot(p, p);
+                }
+                else
+                {
+                    out.entityType = ClosestEntityType::Edge;
+                    out.entityLocalId = 1u;
+                    nLocal = data.edgesNormal[1];
+                    dotVecLocal = projPoint - glm::vec3(data.v2, 0.0f, 0.0f);
+                    unsignedDistSq = de2 * de2 + projPoint.z * projPoint.z;
+
+                    const glm::vec2 a = glm::vec2(data.v2, 0.0f);
+                    const glm::vec2 b = data.v3;
+                    const glm::vec2 e = b - a;
+                    const float lenE = glm::length(e);
+                    if (lenE > 1.0e-12f)
+                    {
+                        const glm::vec2 dir = e / lenE;
+                        const glm::vec2 p2 = glm::vec2(projPoint.x, projPoint.y) - a;
+                        const float s = glm::clamp(glm::dot(p2, dir), 0.0f, lenE);
+                        out.edgeT = s / lenE;
+                        const glm::vec2 q = a + s * dir;
+                        nearestLocal = glm::vec3(q.x, q.y, 0.0f);
+                    }
+                    else
+                    {
+                        out.edgeT = 0.0f;
+                        nearestLocal = glm::vec3(a.x, a.y, 0.0f);
+                    }
+                }
+            }
+        }
+        else if (de3 >= 0.0f)
+        {
+            const float t1 = projPoint.x * data.c.x + projPoint.y * data.c.y;
+            if (t1 >= 0.0f)
+            {
+                out.entityType = ClosestEntityType::Vertex;
+                out.entityLocalId = 0u;
+                nearestLocal = glm::vec3(0.0f);
+                nLocal = data.verticesNormal[0];
+                dotVecLocal = projPoint;
+                unsignedDistSq = glm::dot(projPoint, projPoint);
+            }
+            else
+            {
+                const float t3 = (projPoint.x - data.v3.x) * data.c.x + (projPoint.y - data.v3.y) * data.c.y;
+                if (t3 <= 0.0f)
+                {
+                    out.entityType = ClosestEntityType::Vertex;
+                    out.entityLocalId = 2u;
+                    nearestLocal = glm::vec3(data.v3.x, data.v3.y, 0.0f);
+                    nLocal = data.verticesNormal[2];
+                    const glm::vec3 p = projPoint - nearestLocal;
+                    dotVecLocal = p;
+                    unsignedDistSq = glm::dot(p, p);
+                }
+                else
+                {
+                    out.entityType = ClosestEntityType::Edge;
+                    out.entityLocalId = 2u;
+                    nLocal = data.edgesNormal[2];
+                    dotVecLocal = projPoint;
+                    unsignedDistSq = de3 * de3 + projPoint.z * projPoint.z;
+
+                    const glm::vec2 a = glm::vec2(0.0f, 0.0f);
+                    const glm::vec2 b = data.v3;
+                    const glm::vec2 e = b - a;
+                    const float lenE = glm::length(e);
+                    if (lenE > 1.0e-12f)
+                    {
+                        const glm::vec2 dir = e / lenE;
+                        const glm::vec2 p2 = glm::vec2(projPoint.x, projPoint.y);
+                        const float s = glm::clamp(glm::dot(p2, dir), 0.0f, lenE);
+                        out.edgeT = s / lenE;
+                        const glm::vec2 q = s * dir;
+                        nearestLocal = glm::vec3(q.x, q.y, 0.0f);
+                    }
+                    else
+                    {
+                        out.edgeT = 0.0f;
+                        nearestLocal = glm::vec3(0.0f);
+                    }
+                }
+            }
+        }
+        else
+        {
+            out.entityType = ClosestEntityType::Face;
+            out.entityLocalId = 0u;
+            nearestLocal = glm::vec3(projPoint.x, projPoint.y, 0.0f);
+            nLocal = glm::vec3(0.0f, 0.0f, 1.0f);
+            dotVecLocal = projPoint;
+            unsignedDistSq = projPoint.z * projPoint.z;
+        }
+
+        out.dotVal = glm::dot(nLocal, dotVecLocal);
+        out.sign = (out.dotVal < 0.0f) ? -1.0f : 1.0f;
+        out.unsignedDist = std::sqrt(glm::max(unsignedDistSq, 0.0f));
+
+        out.nearestPoint = data.origin + glm::transpose(data.transform) * nearestLocal;
+        if (out.entityType == ClosestEntityType::Face)
+        {
+            out.pseudoNormal = data.getTriangleNormal();
+        }
+        else
+        {
+            const glm::vec3 nW = glm::transpose(data.transform) * nLocal;
+            const float lenSq = glm::dot(nW, nW);
+            if (std::isfinite(nW.x) && std::isfinite(nW.y) && std::isfinite(nW.z) && lenSq > 1.0e-12f)
+            {
+                out.pseudoNormal = nW / std::sqrt(lenSq);
+            }
+            else
+            {
+                out.pseudoNormal = data.getTriangleNormal();
+            }
+        }
+
+        return out;
     }
 
     inline float getSignedDistPointAndTriangle(glm::vec3 point, const TriangleData& data)

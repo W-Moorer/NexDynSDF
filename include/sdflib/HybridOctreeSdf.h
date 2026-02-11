@@ -61,6 +61,8 @@ public:
         
         // Compute boundary values
         computeMinBorderValue();
+
+        strategy.printStatistics();
     }
 };
 

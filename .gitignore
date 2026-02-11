@@ -45,4 +45,5 @@ output/
 vcpkg_installed/
 documents/
 temps/
+debug/
 .trae/

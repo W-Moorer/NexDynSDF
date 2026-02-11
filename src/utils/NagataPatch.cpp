@@ -397,20 +397,24 @@ namespace NagataPatch
             *outNearestPoint = res.nearestPoint;
         }
         
-        glm::vec3 Su, Sv;
-        evaluateDerivatives(patch, dummyEnhance, res.parameter.x, res.parameter.y, Su, Sv);
-        
-        glm::vec3 normal = glm::cross(Su, Sv);
-        if (glm::dot(normal, normal) > 1e-12f)
+        const float u = res.parameter.x;
+        const float v = res.parameter.y;
+
+        const float w0 = 1.0f - u;
+        const float w1 = u - v;
+        const float w2 = v;
+
+        glm::vec3 normal = w0 * patch.normals[0] + w1 * patch.normals[1] + w2 * patch.normals[2];
+        const float normalLenSq = glm::dot(normal, normal);
+        if (std::isfinite(normal.x) && std::isfinite(normal.y) && std::isfinite(normal.z) && normalLenSq > 1.0e-12f)
         {
             normal = glm::normalize(normal);
         }
         else
         {
-             // Fallback: use triangle normal?
-             glm::vec3 e1 = patch.vertices[1] - patch.vertices[0];
-             glm::vec3 e2 = patch.vertices[2] - patch.vertices[0];
-             normal = glm::normalize(glm::cross(e1, e2));
+            const glm::vec3 e1 = patch.vertices[1] - patch.vertices[0];
+            const glm::vec3 e2 = patch.vertices[2] - patch.vertices[0];
+            normal = glm::normalize(glm::cross(e1, e2));
         }
 
         glm::vec3 diff = point - res.nearestPoint;
