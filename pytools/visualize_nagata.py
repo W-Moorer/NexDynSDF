@@ -413,16 +413,6 @@ def visualize_nagata(
         color_by_face_id: 是否按面片ID着色
         enhance: 是否启用折纹裂隙修复
     """
-    """
-    可视化NSM文件的Nagata曲面
-    
-    Args:
-        filepath: NSM文件路径
-        resolution: Nagata采样密度
-        show_comparison: 是否显示原始网格对比
-        show_edges: 是否显示网格边
-        color_by_face_id: 是否按面片ID着色
-    """
     # 加载NSM数据
     print(f"加载文件: {filepath}")
     mesh_data = load_nsm(filepath)
@@ -435,20 +425,25 @@ def visualize_nagata(
     
     print(f"计算Nagata曲面 (分辨率={resolution})...")
     
-    # 创建原始网格
     original_mesh = create_pyvista_mesh(mesh_data)
     
-    # 创建Nagata曲面网格
     if enhance:
         print("启用折纹裂隙修复模式...")
         
-        # 尝试加载缓存
         eng_path = get_eng_filepath(filepath)
         cached_c_sharps = None
         if has_cached_data(filepath):
             cached_c_sharps = load_enhanced_data(eng_path)
         
-        nagata_mesh, c_sharps = create_nagata_mesh_enhanced(
+        nagata_mesh = create_nagata_mesh(
+            mesh_data.vertices,
+            mesh_data.triangles,
+            tri_vertex_normals,
+            mesh_data.tri_face_ids,
+            resolution
+        )
+        
+        enhanced_mesh, c_sharps = create_nagata_mesh_enhanced(
             mesh_data.vertices,
             mesh_data.triangles,
             tri_vertex_normals,
@@ -457,10 +452,86 @@ def visualize_nagata(
             cached_c_sharps=cached_c_sharps
         )
         
-        # 如果指定了 bake 且有新计算的数据，保存
         if bake and cached_c_sharps is None and c_sharps:
             save_enhanced_data(eng_path, c_sharps)
-    else:
+        
+        print(f"Nagata曲面: {nagata_mesh.n_points} 个顶点, {nagata_mesh.n_cells} 个三角形")
+        print(f"Enhanced曲面: {enhanced_mesh.n_points} 个顶点, {enhanced_mesh.n_cells} 个三角形")
+        
+        if color_by_face_id:
+            scalars = 'face_id'
+            cmap = 'tab20'
+        else:
+            scalars = None
+            cmap = None
+        
+        plotter = pv.Plotter(shape=(1, 3))
+        
+        times_font = dict(font='times', font_size=14)
+        
+        plotter.subplot(0, 0)
+        plotter.add_text("Mesh", font='times', font_size=14, position='upper_edge')
+        plotter.set_background('white')
+        if color_by_face_id:
+            plotter.add_mesh(
+                original_mesh,
+                scalars=scalars,
+                cmap=cmap,
+                show_edges=show_edges,
+                opacity=1.0
+            )
+        else:
+            plotter.add_mesh(
+                original_mesh,
+                color='lightblue',
+                show_edges=show_edges,
+                opacity=1.0
+            )
+        plotter.add_axes()
+        
+        plotter.subplot(0, 1)
+        plotter.add_text("Nagata", font='times', font_size=14, position='upper_edge')
+        plotter.set_background('white')
+        if color_by_face_id and 'face_id' in nagata_mesh.cell_data:
+            plotter.add_mesh(
+                nagata_mesh,
+                scalars='face_id',
+                cmap=cmap,
+                show_edges=show_edges,
+                opacity=0.5
+            )
+        else:
+            plotter.add_mesh(
+                nagata_mesh,
+                color='lightblue',
+                show_edges=show_edges,
+                opacity=0.5
+            )
+        plotter.add_axes()
+        
+        plotter.subplot(0, 2)
+        plotter.add_text("Enhance", font='times', font_size=14, position='upper_edge')
+        plotter.set_background('white')
+        if color_by_face_id and 'face_id' in enhanced_mesh.cell_data:
+            plotter.add_mesh(
+                enhanced_mesh,
+                scalars='face_id',
+                cmap=cmap,
+                show_edges=show_edges,
+                opacity=0.5
+            )
+        else:
+            plotter.add_mesh(
+                enhanced_mesh,
+                color='lightblue',
+                show_edges=show_edges,
+                opacity=0.5
+            )
+        plotter.add_axes()
+        
+        plotter.link_views()
+        
+    elif show_comparison:
         nagata_mesh = create_nagata_mesh(
             mesh_data.vertices,
             mesh_data.triangles,
@@ -468,22 +539,18 @@ def visualize_nagata(
             mesh_data.tri_face_ids,
             resolution
         )
-    
-    print(f"Nagata曲面: {nagata_mesh.n_points} 个顶点, {nagata_mesh.n_cells} 个三角形")
-    
-    # 设置颜色方案
-    if color_by_face_id:
-        scalars = 'face_id'
-        cmap = 'tab20'
-    else:
-        scalars = None
-        cmap = None
-    
-    if show_comparison:
-        # 并排对比显示
+        
+        print(f"Nagata曲面: {nagata_mesh.n_points} 个顶点, {nagata_mesh.n_cells} 个三角形")
+        
+        if color_by_face_id:
+            scalars = 'face_id'
+            cmap = 'tab20'
+        else:
+            scalars = None
+            cmap = None
+        
         plotter = pv.Plotter(shape=(1, 2))
         
-        # 左边: 原始网格
         plotter.subplot(0, 0)
         plotter.add_text("原始网格", font_size=12, position='upper_edge')
         plotter.set_background('white')
@@ -505,7 +572,6 @@ def visualize_nagata(
             )
         plotter.add_axes()
         
-        # 右边: Nagata曲面
         plotter.subplot(0, 1)
         plotter.add_text("Nagata曲面", font_size=12, position='upper_edge')
         plotter.set_background('white')
@@ -516,22 +582,37 @@ def visualize_nagata(
                 scalars='face_id',
                 cmap=cmap,
                 show_edges=show_edges,
-                opacity=1.0
+                opacity=0.5
             )
         else:
             plotter.add_mesh(
                 nagata_mesh,
                 color='lightblue',
                 show_edges=show_edges,
-                opacity=1.0
+                opacity=0.5
             )
         plotter.add_axes()
         
-        # 链接两个视图的相机
         plotter.link_views()
         
     else:
-        # 单独显示Nagata曲面
+        nagata_mesh = create_nagata_mesh(
+            mesh_data.vertices,
+            mesh_data.triangles,
+            tri_vertex_normals,
+            mesh_data.tri_face_ids,
+            resolution
+        )
+        
+        print(f"Nagata曲面: {nagata_mesh.n_points} 个顶点, {nagata_mesh.n_cells} 个三角形")
+        
+        if color_by_face_id:
+            scalars = 'face_id'
+            cmap = 'tab20'
+        else:
+            scalars = None
+            cmap = None
+        
         plotter = pv.Plotter()
         plotter.set_background('white')
         
