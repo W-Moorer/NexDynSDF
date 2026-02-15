@@ -514,7 +514,8 @@ def evaluate_nagata_patch_with_crease(
     c1_sharp: np.ndarray, c2_sharp: np.ndarray, c3_sharp: np.ndarray,
     is_crease: tuple,
     u: np.ndarray, v: np.ndarray,
-    k_factor: float = 0.0
+    k_factor: float = 0.0,
+    enforce_constraints: bool = True
 ) -> np.ndarray:
     """
     带折痕修复的 Nagata 曲面求值 (v3: 自然结构传播)
@@ -588,9 +589,107 @@ def evaluate_nagata_patch_with_crease(
         damping3 = gaussian_decay(d3, k_factor)
         correction -= delta_c3 * basis3[:, None] * damping3[:, None]
     
-    # 最终坐标 = 线性项 - 原始二次项 + 修正项
     points = linear - quadratic_orig + correction
+    if not enforce_constraints or not any(is_crease):
+        return points
+
+    n_ref = _compute_reference_normal(x00, x10, x11, None, None, None)
+    if n_ref is None:
+        return points
+
+    for idx in range(len(u)):
+        uu = float(u[idx])
+        vv = float(v[idx])
+        orig_point = evaluate_nagata_patch(
+            x00, x10, x11,
+            c1_orig, c2_orig, c3_orig,
+            np.array([uu]), np.array([vv])
+        ).flatten()
+        dXdu, dXdv = evaluate_nagata_derivatives(
+            x00, x10, x11, c1_orig, c2_orig, c3_orig,
+            uu, vv,
+            is_crease=is_crease,
+            c_sharps=(c1_sharp, c2_sharp, c3_sharp),
+            k_factor=k_factor
+        )
+        jacobian = float(np.dot(np.cross(dXdu, dXdv), n_ref))
+        if jacobian <= 0.0:
+            points[idx] = orig_point
+            continue
+        points[idx] = _apply_edge_crossing_guard(
+            orig_point,
+            points[idx],
+            x00, x10, x11,
+            c1_sharp, c2_sharp, c3_sharp,
+            is_crease,
+            uu, vv,
+            n_ref
+        )
     return points
+
+
+def _safe_normalize(vec: np.ndarray, eps: float = 1e-12) -> Optional[np.ndarray]:
+    norm = np.linalg.norm(vec)
+    if norm < eps:
+        return None
+    return vec / norm
+
+
+def _compute_reference_normal(
+    x00: np.ndarray,
+    x10: np.ndarray,
+    x11: np.ndarray,
+    n00: Optional[np.ndarray],
+    n10: Optional[np.ndarray],
+    n11: Optional[np.ndarray],
+) -> Optional[np.ndarray]:
+    tri_normal = _safe_normalize(np.cross(x10 - x00, x11 - x00))
+    if tri_normal is not None:
+        return tri_normal
+    if n00 is None or n10 is None or n11 is None:
+        return None
+    return _safe_normalize(n00 + n10 + n11)
+
+
+def _apply_edge_crossing_guard(
+    x_orig: np.ndarray,
+    x_new: np.ndarray,
+    x00: np.ndarray,
+    x10: np.ndarray,
+    x11: np.ndarray,
+    c1_sharp: np.ndarray,
+    c2_sharp: np.ndarray,
+    c3_sharp: np.ndarray,
+    is_crease: tuple,
+    u: float,
+    v: float,
+    n_ref: Optional[np.ndarray],
+) -> np.ndarray:
+    if n_ref is None:
+        return x_new
+
+    edges = [
+        (x00, x10, x11, c1_sharp, u),
+        (x10, x11, x00, c2_sharp, v),
+        (x00, x11, x10, c3_sharp, v),
+    ]
+
+    for edge_idx, (a, b, opp, c_sharp, t) in enumerate(edges):
+        if not is_crease[edge_idx]:
+            continue
+        e = b - a
+        side_dir = _safe_normalize(np.cross(n_ref, e))
+        if side_dir is None:
+            continue
+        if np.dot(side_dir, opp - (a + b) * 0.5) < 0:
+            side_dir = -side_dir
+        t_clamped = float(np.clip(t, 0.0, 1.0))
+        edge_point = (1.0 - t_clamped) * a + t_clamped * b - c_sharp * t_clamped * (1.0 - t_clamped)
+        s_new = float(np.dot(x_new - edge_point, side_dir))
+        if s_new < 0.0:
+            x_new = x_new - s_new * side_dir
+
+    return x_new
 
 
 def sample_nagata_triangle_with_crease(
@@ -599,7 +698,9 @@ def sample_nagata_triangle_with_crease(
     c_sharps: dict,
     edge_keys: tuple,
     resolution: int = 10,
-    k_factor: float = 0.0
+    k_factor: float = 0.0,
+    guard_edge_crossing: bool = True,
+    enforce_jacobian: bool = True
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     带折痕修复的单三角形 Nagata 采样 (v3: 自然结构传播)
@@ -641,6 +742,8 @@ def sample_nagata_triangle_with_crease(
     vertices = []
     vertex_map = {}
     
+    n_ref = _compute_reference_normal(x00, x10, x11, n00, n10, n11) if guard_edge_crossing else None
+
     for i, u in enumerate(u_vals):
         for j, v in enumerate(v_vals):
             if v <= u + 1e-10:
@@ -650,8 +753,25 @@ def sample_nagata_triangle_with_crease(
                     c1_sharp, c2_sharp, c3_sharp,
                     tuple(is_crease),
                     np.array([u]), np.array([v]),
-                    k_factor
+                    k_factor,
+                    enforce_constraints=enforce_jacobian or guard_edge_crossing
                 )
+                if guard_edge_crossing and any(is_crease):
+                    orig_point = evaluate_nagata_patch(
+                        x00, x10, x11,
+                        c1_orig, c2_orig, c3_orig,
+                        np.array([u]), np.array([v])
+                    ).flatten()
+                    guarded_point = _apply_edge_crossing_guard(
+                        orig_point,
+                        point.flatten(),
+                        x00, x10, x11,
+                        c1_sharp, c2_sharp, c3_sharp,
+                        tuple(is_crease),
+                        float(u), float(v),
+                        n_ref
+                    )
+                    point = guarded_point.reshape(1, 3)
                 vertex_map[(i, j)] = len(vertices)
                 vertices.append(point.flatten())
     

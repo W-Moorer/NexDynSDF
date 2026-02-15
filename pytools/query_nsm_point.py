@@ -56,6 +56,28 @@ def main():
     
     # Query
     query_pt = np.array([args.x, args.y, args.z])
+    def compute_surface_derivatives(model_obj, tri_idx: int, uv):
+        try:
+            u, v = float(uv[0]), float(uv[1])
+        except Exception:
+            return None
+        if not hasattr(model_obj, "_eval_patch_point_and_derivatives"):
+            return None
+        try:
+            _, dXdu, dXdv = model_obj._eval_patch_point_and_derivatives(int(tri_idx), u, v)
+        except Exception:
+            return None
+        n = np.cross(dXdu, dXdv)
+        n_len = float(np.linalg.norm(n))
+        if n_len > 1e-12:
+            n = n / n_len
+        return {
+            "dXdu": dXdu,
+            "dXdv": dXdv,
+            "surface_normal": n,
+            "jacobian_norm": float(n_len),
+        }
+
     def run_query(pt: np.ndarray):
         res = model.query_feature_aware(pt, k_nearest=args.k_nearest)
         if not res:
@@ -75,6 +97,10 @@ def main():
         out['signed_distance'] = signed_distance
         out['dot_val'] = dot_val
         out['dist_geo'] = dist_geo
+        if 'triangle_index' in out and 'uv' in out and out['uv'] is not None:
+            deriv = compute_surface_derivatives(model, out['triangle_index'], out['uv'])
+            if deriv is not None:
+                out.update(deriv)
         return out
 
     if args.num_points and args.num_points > 0:
@@ -179,6 +205,10 @@ def main():
         print(f"  Surface Normal:  [{result['normal'][0]:.6f}, {result['normal'][1]:.6f}, {result['normal'][2]:.6f}]")
         print(f"  Patch Index:     {result['triangle_index']}")
         print(f"  UV Parameters:   u={result['uv'][0]:.4f}, v={result['uv'][1]:.4f}")
+        if 'surface_normal' in result:
+            sn = result['surface_normal']
+            print(f"  dXduxdXdv:       [{sn[0]:.6f}, {sn[1]:.6f}, {sn[2]:.6f}]")
+            print(f"  Jacobian Norm:   {result['jacobian_norm']:.6f}")
         if 'feature_type' in result:
             print(f"  Feature Type:    {result['feature_type']}")
         print(f"  Signed Distance: {result['signed_distance']:.6f}")

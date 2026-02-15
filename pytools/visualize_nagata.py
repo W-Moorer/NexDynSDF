@@ -17,7 +17,9 @@ import sys
 from nsm_reader import load_nsm, create_pyvista_mesh
 from nagata_patch import (sample_all_nagata_patches, nagata_patch, 
                           compute_crease_direction, compute_c_sharp,
-                          sample_nagata_triangle_with_crease)
+                          sample_nagata_triangle_with_crease,
+                          evaluate_nagata_patch_with_crease,
+                          evaluate_nagata_derivatives)
 from nagata_storage import (save_enhanced_data, load_enhanced_data, 
                             get_eng_filepath, has_cached_data)
 
@@ -66,6 +68,171 @@ def create_nagata_mesh(
         mesh.cell_data['original_tri'] = face_to_original
     
     return mesh
+
+
+def _polydata_to_triangles(mesh: pv.PolyData) -> tuple:
+    if mesh is None or mesh.n_cells == 0:
+        return np.zeros((0, 3), dtype=float), np.zeros((0, 3), dtype=int)
+    faces = mesh.faces.reshape(-1, 4)
+    if np.any(faces[:, 0] != 3):
+        raise ValueError("Only triangle faces are supported")
+    return mesh.points.copy(), faces[:, 1:4].astype(np.int32)
+
+
+def _segment_intersects_triangle(p0: np.ndarray, p1: np.ndarray, t0: np.ndarray, t1: np.ndarray, t2: np.ndarray, eps: float) -> bool:
+    d = p1 - p0
+    e1 = t1 - t0
+    e2 = t2 - t0
+    h = np.cross(d, e2)
+    a = np.dot(e1, h)
+    if abs(a) < eps:
+        return False
+    f = 1.0 / a
+    s = p0 - t0
+    u = f * np.dot(s, h)
+    if u < -eps or u > 1.0 + eps:
+        return False
+    q = np.cross(s, e1)
+    v = f * np.dot(d, q)
+    if v < -eps or u + v > 1.0 + eps:
+        return False
+    t = f * np.dot(e2, q)
+    return -eps <= t <= 1.0 + eps
+
+
+def _segment_intersects_triangle_strict(p0: np.ndarray, p1: np.ndarray, t0: np.ndarray, t1: np.ndarray, t2: np.ndarray, eps: float) -> bool:
+    d = p1 - p0
+    e1 = t1 - t0
+    e2 = t2 - t0
+    h = np.cross(d, e2)
+    a = np.dot(e1, h)
+    if abs(a) < eps:
+        return False
+    f = 1.0 / a
+    s = p0 - t0
+    u = f * np.dot(s, h)
+    if u <= eps or u >= 1.0 - eps:
+        return False
+    q = np.cross(s, e1)
+    v = f * np.dot(d, q)
+    if v <= eps or u + v >= 1.0 - eps:
+        return False
+    t = f * np.dot(e2, q)
+    return eps < t < 1.0 - eps
+
+
+def _orient2d(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _on_segment(a: np.ndarray, b: np.ndarray, p: np.ndarray, eps: float) -> bool:
+    return (min(a[0], b[0]) - eps <= p[0] <= max(a[0], b[0]) + eps and
+            min(a[1], b[1]) - eps <= p[1] <= max(a[1], b[1]) + eps and
+            abs(_orient2d(a, b, p)) <= eps)
+
+
+def _segments_intersect_2d(a1: np.ndarray, a2: np.ndarray, b1: np.ndarray, b2: np.ndarray, eps: float) -> bool:
+    o1 = _orient2d(a1, a2, b1)
+    o2 = _orient2d(a1, a2, b2)
+    o3 = _orient2d(b1, b2, a1)
+    o4 = _orient2d(b1, b2, a2)
+    if (o1 * o2 < -eps) and (o3 * o4 < -eps):
+        return True
+    if abs(o1) <= eps and _on_segment(a1, a2, b1, eps):
+        return True
+    if abs(o2) <= eps and _on_segment(a1, a2, b2, eps):
+        return True
+    if abs(o3) <= eps and _on_segment(b1, b2, a1, eps):
+        return True
+    if abs(o4) <= eps and _on_segment(b1, b2, a2, eps):
+        return True
+    return False
+
+
+def _segments_intersect_2d_strict(a1: np.ndarray, a2: np.ndarray, b1: np.ndarray, b2: np.ndarray, eps: float) -> bool:
+    o1 = _orient2d(a1, a2, b1)
+    o2 = _orient2d(a1, a2, b2)
+    o3 = _orient2d(b1, b2, a1)
+    o4 = _orient2d(b1, b2, a2)
+    return (o1 * o2 < -eps) and (o3 * o4 < -eps)
+
+
+def _point_in_tri_2d(p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray, eps: float) -> bool:
+    o1 = _orient2d(a, b, p)
+    o2 = _orient2d(b, c, p)
+    o3 = _orient2d(c, a, p)
+    has_neg = (o1 < -eps) or (o2 < -eps) or (o3 < -eps)
+    has_pos = (o1 > eps) or (o2 > eps) or (o3 > eps)
+    return not (has_neg and has_pos)
+
+
+def _point_in_tri_2d_strict(p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray, eps: float) -> bool:
+    o1 = _orient2d(a, b, p)
+    o2 = _orient2d(b, c, p)
+    o3 = _orient2d(c, a, p)
+    if (abs(o1) <= eps) or (abs(o2) <= eps) or (abs(o3) <= eps):
+        return False
+    return (o1 > 0 and o2 > 0 and o3 > 0) or (o1 < 0 and o2 < 0 and o3 < 0)
+
+
+def _tri_tri_intersect(a0: np.ndarray, a1: np.ndarray, a2: np.ndarray,
+                       b0: np.ndarray, b1: np.ndarray, b2: np.ndarray,
+                       eps: float) -> bool:
+    n1 = np.cross(a1 - a0, a2 - a0)
+    n2 = np.cross(b1 - b0, b2 - b0)
+    if np.linalg.norm(n1) < eps or np.linalg.norm(n2) < eps:
+        return False
+    if (abs(np.dot(n1, b0 - a0)) < eps and
+        abs(np.dot(n1, b1 - a0)) < eps and
+        abs(np.dot(n1, b2 - a0)) < eps):
+        axis = int(np.argmax(np.abs(n1)))
+        def proj(p):
+            if axis == 0:
+                return np.array([p[1], p[2]])
+            if axis == 1:
+                return np.array([p[0], p[2]])
+            return np.array([p[0], p[1]])
+        a0p, a1p, a2p = proj(a0), proj(a1), proj(a2)
+        b0p, b1p, b2p = proj(b0), proj(b1), proj(b2)
+        a_edges = [(a0p, a1p), (a1p, a2p), (a2p, a0p)]
+        b_edges = [(b0p, b1p), (b1p, b2p), (b2p, b0p)]
+        for e1 in a_edges:
+            for e2 in b_edges:
+                if _segments_intersect_2d_strict(e1[0], e1[1], e2[0], e2[1], eps):
+                    return True
+        if _point_in_tri_2d_strict(a0p, b0p, b1p, b2p, eps):
+            return True
+        if _point_in_tri_2d_strict(b0p, a0p, a1p, a2p, eps):
+            return True
+        return False
+    a_edges3d = [(a0, a1), (a1, a2), (a2, a0)]
+    b_edges3d = [(b0, b1), (b1, b2), (b2, b0)]
+    for e0, e1 in a_edges3d:
+        if _segment_intersects_triangle_strict(e0, e1, b0, b1, b2, eps):
+            return True
+    for e0, e1 in b_edges3d:
+        if _segment_intersects_triangle_strict(e0, e1, a0, a1, a2, eps):
+            return True
+    return False
+
+
+def count_self_intersections(vertices: np.ndarray, faces: np.ndarray, eps: float = 1e-9) -> dict:
+    n = faces.shape[0]
+    if n == 0:
+        return {"pairs": 0, "pairs_sample": []}
+    face_vertices = faces
+    vertex_sets = [set(face_vertices[i]) for i in range(n)]
+    pairs = []
+    for i in range(n):
+        a0, a1, a2 = vertices[face_vertices[i]]
+        for j in range(i + 1, n):
+            if vertex_sets[i] & vertex_sets[j]:
+                continue
+            b0, b1, b2 = vertices[face_vertices[j]]
+            if _tri_tri_intersect(a0, a1, a2, b0, b1, b2, eps):
+                pairs.append((i, j))
+    sample = pairs[:10]
+    return {"pairs": len(pairs), "pairs_sample": sample}
 
 
 def detect_crease_edges(vertices, triangles, tri_vertex_normals, gap_threshold=1e-4):
@@ -153,7 +320,102 @@ def detect_crease_edges(vertices, triangles, tri_vertex_normals, gap_threshold=1
     return crease_edges
 
 
-def compute_c_sharps_for_edges(crease_edges):
+def _edge_index_for_triangle(tri: np.ndarray, edge_key: tuple) -> int:
+    if tuple(sorted([tri[0], tri[1]])) == edge_key:
+        return 0
+    if tuple(sorted([tri[1], tri[2]])) == edge_key:
+        return 1
+    if tuple(sorted([tri[0], tri[2]])) == edge_key:
+        return 2
+    return -1
+
+
+def _sample_uv_for_edge(edge_idx: int, steps: int = 5, eps: float = 0.05) -> list:
+    ts = np.linspace(eps, 1.0 - eps, steps)
+    uvs = []
+    if edge_idx == 0:
+        for t in ts:
+            uvs.append((float(t), float(eps)))
+    elif edge_idx == 1:
+        for t in ts:
+            uvs.append((float(1.0 - eps), float(t * (1.0 - eps))))
+    elif edge_idx == 2:
+        for t in ts:
+            uvs.append((float(t), float(t - eps)))
+    return uvs
+
+
+def _check_edge_constraints_for_triangle(
+    x00: np.ndarray,
+    x10: np.ndarray,
+    x11: np.ndarray,
+    c1_orig: np.ndarray,
+    c2_orig: np.ndarray,
+    c3_orig: np.ndarray,
+    edge_idx: int,
+    c_sharp_edge: np.ndarray,
+    k_factor: float,
+    eps: float = 1e-10
+) -> bool:
+    n_ref = np.cross(x10 - x00, x11 - x00)
+    n_len = np.linalg.norm(n_ref)
+    if n_len < 1e-12:
+        return True
+    n_ref = n_ref / n_len
+
+    is_crease = [False, False, False]
+    c_sharps = [c1_orig, c2_orig, c3_orig]
+    is_crease[edge_idx] = True
+    c_sharps[edge_idx] = c_sharp_edge
+
+    if edge_idx == 0:
+        a, b, opp = x00, x10, x11
+    elif edge_idx == 1:
+        a, b, opp = x10, x11, x00
+    else:
+        a, b, opp = x00, x11, x10
+
+    e = b - a
+    side_dir = np.cross(n_ref, e)
+    side_len = np.linalg.norm(side_dir)
+    if side_len < 1e-12:
+        return True
+    side_dir = side_dir / side_len
+    if np.dot(side_dir, opp - (a + b) * 0.5) < 0:
+        side_dir = -side_dir
+
+    for uu, vv in _sample_uv_for_edge(edge_idx):
+        p = evaluate_nagata_patch_with_crease(
+            x00, x10, x11,
+            c1_orig, c2_orig, c3_orig,
+            c_sharps[0], c_sharps[1], c_sharps[2],
+            tuple(is_crease),
+            np.array([uu]), np.array([vv]),
+            k_factor,
+            enforce_constraints=False
+        ).flatten()
+        dXdu, dXdv = evaluate_nagata_derivatives(
+            x00, x10, x11,
+            c1_orig, c2_orig, c3_orig,
+            uu, vv,
+            is_crease=tuple(is_crease),
+            c_sharps=tuple(c_sharps),
+            k_factor=k_factor
+        )
+        jac = float(np.dot(np.cross(dXdu, dXdv), n_ref))
+        if jac <= 0.0:
+            return False
+
+        t = uu if edge_idx == 0 else vv
+        edge_point = (1.0 - t) * a + t * b - c_sharp_edge * t * (1.0 - t)
+        s = float(np.dot(p - edge_point, side_dir))
+        if s < -eps:
+            return False
+
+    return True
+
+
+def compute_c_sharps_for_edges(crease_edges, vertices, triangles, tri_vertex_normals, k_factor: float = 0.0):
     """
     为所有裂隙边计算共享边界系数
     
@@ -176,7 +438,54 @@ def compute_c_sharps_for_edges(crease_edges):
         
         # 计算共享系数
         c_sharp = compute_c_sharp(A, B, d_A, d_B)
-        c_sharps[edge_key] = c_sharp
+
+        tri_L = info['tri_L']
+        tri_R = info['tri_R']
+        tri_L_idx = triangles[tri_L]
+        tri_R_idx = triangles[tri_R]
+        edge_idx_L = _edge_index_for_triangle(tri_L_idx, edge_key)
+        edge_idx_R = _edge_index_for_triangle(tri_R_idx, edge_key)
+
+        if edge_idx_L < 0 or edge_idx_R < 0:
+            c_sharps[edge_key] = c_sharp
+            continue
+
+        x00_L, x10_L, x11_L = vertices[tri_L_idx[0]], vertices[tri_L_idx[1]], vertices[tri_L_idx[2]]
+        n00_L, n10_L, n11_L = tri_vertex_normals[tri_L]
+        c1_L, c2_L, c3_L = nagata_patch(x00_L, x10_L, x11_L, n00_L, n10_L, n11_L)
+        c_orig_L = [c1_L, c2_L, c3_L][edge_idx_L]
+
+        x00_R, x10_R, x11_R = vertices[tri_R_idx[0]], vertices[tri_R_idx[1]], vertices[tri_R_idx[2]]
+        n00_R, n10_R, n11_R = tri_vertex_normals[tri_R]
+        c1_R, c2_R, c3_R = nagata_patch(x00_R, x10_R, x11_R, n00_R, n10_R, n11_R)
+        c_orig_R = [c1_R, c2_R, c3_R][edge_idx_R]
+
+        baseline = 0.5 * (c_orig_L + c_orig_R)
+        low, high = 0.0, 1.0
+        best = baseline
+        for _ in range(12):
+            mid = (low + high) * 0.5
+            candidate = baseline + mid * (c_sharp - baseline)
+            ok_L = _check_edge_constraints_for_triangle(
+                x00_L, x10_L, x11_L,
+                c1_L, c2_L, c3_L,
+                edge_idx_L,
+                candidate,
+                k_factor
+            )
+            ok_R = _check_edge_constraints_for_triangle(
+                x00_R, x10_R, x11_R,
+                c1_R, c2_R, c3_R,
+                edge_idx_R,
+                candidate,
+                k_factor
+            )
+            if ok_L and ok_R:
+                best = candidate
+                low = mid
+            else:
+                high = mid
+        c_sharps[edge_key] = best
     
     return c_sharps
 
@@ -214,7 +523,9 @@ def create_nagata_mesh_enhanced(
             return mesh, {}
         
         print("计算共享边界系数...")
-        c_sharps = compute_c_sharps_for_edges(crease_edges)
+        c_sharps = compute_c_sharps_for_edges(
+            crease_edges, vertices, triangles, tri_vertex_normals, d0
+        )
     
     print("采样带折纹修复的 Nagata 曲面...")
     all_vertices = []
@@ -400,7 +711,8 @@ def visualize_nagata(
     show_edges: bool = False,
     color_by_face_id: bool = False,
     enhance: bool = False,
-    bake: bool = False
+    bake: bool = False,
+    check_self_intersection: bool = False
 ):
     """
     可视化NSM文件的Nagata曲面
@@ -457,6 +769,13 @@ def visualize_nagata(
         
         print(f"Nagata曲面: {nagata_mesh.n_points} 个顶点, {nagata_mesh.n_cells} 个三角形")
         print(f"Enhanced曲面: {enhanced_mesh.n_points} 个顶点, {enhanced_mesh.n_cells} 个三角形")
+
+        if check_self_intersection:
+            enhanced_vertices, enhanced_faces = _polydata_to_triangles(enhanced_mesh)
+            stats = count_self_intersections(enhanced_vertices, enhanced_faces)
+            print(f"Enhanced自交对数: {stats['pairs']}")
+            if stats["pairs_sample"]:
+                print(f"示例对: {stats['pairs_sample']}")
         
         if color_by_face_id:
             scalars = 'face_id'
@@ -680,6 +999,8 @@ def main():
                         help='启用折纹裂隙修复（修复法向不一致造成的裂隙）')
     parser.add_argument('--bake', action='store_true',
                         help='保存增强数据到 .eng 文件（下次可直接加载）')
+    parser.add_argument('--check-self-intersection', action='store_true',
+                        help='统计增强曲面自交对数')
     
     args = parser.parse_args()
     
@@ -691,7 +1012,8 @@ def main():
         show_edges=args.edges,
         color_by_face_id=args.color_by_id,
         enhance=args.enhance,
-        bake=args.bake
+        bake=args.bake,
+        check_self_intersection=args.check_self_intersection
     )
 
 
