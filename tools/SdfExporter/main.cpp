@@ -238,8 +238,8 @@ int main(int argc, char** argv)
 
                     pe.edges[edgeIdx].enabled = true;
                     pe.edges[edgeIdx].c_sharp = enhancedData.getCSharpOriented(a, b);
-                    pe.edges[edgeIdx].d0 = 0.1f;
-                    pe.edges[edgeIdx].inv_d0 = 1.0f / pe.edges[edgeIdx].d0;
+                    pe.edges[edgeIdx].d0 = 0.0f;
+                    pe.edges[edgeIdx].inv_d0 = 0.0f;
                     enabledEdgesTotal++;
                 };
 

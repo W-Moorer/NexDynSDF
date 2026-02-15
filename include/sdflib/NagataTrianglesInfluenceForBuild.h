@@ -5,7 +5,6 @@
 #include "utils/TriangleUtils.h"
 #include "utils/NagataPatch.h"
 #include "utils/GJK.h"
-#include "utils/WindingNumberOracle.h"
 #include "InterpolationMethods.h"
 
 #include <vector>
@@ -113,127 +112,6 @@ struct NagataTrianglesInfluenceForBuild
         }();
 
         return cfg;
-    }
-
-    inline static bool rayParityInsideWithDir(glm::vec3 point, const Mesh& mesh, const glm::vec3& dir, float salt)
-    {
-        const std::vector<glm::vec3>& vertices = mesh.getVertices();
-        const std::vector<uint32_t>& indices = mesh.getIndices();
-
-        glm::vec3 d = glm::normalize(dir);
-
-        float h = std::sin(point.x * 12.9898f + point.y * 78.233f + point.z * 37.719f + salt) * 43758.5453f;
-        float frac = h - std::floor(h);
-        glm::vec3 jitter = glm::normalize(glm::vec3(0.123f, 0.456f, 0.789f) + frac * glm::vec3(0.31f, 0.17f, 0.23f));
-        glm::vec3 o = point + 1.0e-4f * jitter;
-
-        uint32_t hits = 0;
-        const float eps = 1.0e-8f;
-
-        const size_t triCount = indices.size() / 3;
-        for (size_t t = 0; t < triCount; t++)
-        {
-            const glm::vec3 a = vertices[indices[3 * t]];
-            const glm::vec3 b = vertices[indices[3 * t + 1]];
-            const glm::vec3 c = vertices[indices[3 * t + 2]];
-
-            const glm::vec3 e1 = b - a;
-            const glm::vec3 e2 = c - a;
-            const glm::vec3 pvec = glm::cross(d, e2);
-            const float det = glm::dot(e1, pvec);
-            if (std::abs(det) <= eps) continue;
-
-            const float invDet = 1.0f / det;
-            const glm::vec3 tvec = o - a;
-            const float u = glm::dot(tvec, pvec) * invDet;
-            if (u < 0.0f || u > 1.0f) continue;
-
-            const glm::vec3 qvec = glm::cross(tvec, e1);
-            const float v = glm::dot(d, qvec) * invDet;
-            if (v < 0.0f || (u + v) > 1.0f) continue;
-
-            const float tHit = glm::dot(e2, qvec) * invDet;
-            if (tHit > eps) hits++;
-        }
-
-        return (hits & 1u) == 1u;
-    }
-
-    inline static bool rayParityInside(glm::vec3 point, const Mesh& mesh)
-    {
-        return rayParityInsideWithDir(point, mesh, glm::vec3(0.852f, 0.231f, 0.468f), 0.0f);
-    }
-
-    inline static std::shared_ptr<const WindingNumberOracle> windingOracleForMesh(const Mesh& mesh)
-    {
-        const auto vPtr = reinterpret_cast<std::uintptr_t>(mesh.getVertices().data());
-        const auto iPtr = reinterpret_cast<std::uintptr_t>(mesh.getIndices().data());
-        const uint64_t key =
-            static_cast<uint64_t>(vPtr) ^
-            (static_cast<uint64_t>(iPtr) << 1) ^
-            (static_cast<uint64_t>(mesh.getVertices().size()) * 0x9e3779b97f4a7c15ULL) ^
-            (static_cast<uint64_t>(mesh.getIndices().size()) * 0xbf58476d1ce4e5b9ULL);
-
-        thread_local uint64_t tlKey = 0;
-        thread_local std::shared_ptr<const WindingNumberOracle> tlOracle;
-        if (tlOracle && tlKey == key)
-        {
-            return tlOracle;
-        }
-
-        static std::mutex m;
-        static std::unordered_map<uint64_t, std::weak_ptr<const WindingNumberOracle>> cache;
-
-        std::lock_guard<std::mutex> lock(m);
-        auto it = cache.find(key);
-        if (it != cache.end())
-        {
-            if (auto alive = it->second.lock())
-            {
-                tlKey = key;
-                tlOracle = alive;
-                return alive;
-            }
-        }
-
-        WindingNumberOracle::Settings settings;
-        settings.theta = 0.25;
-        settings.leafMaxTriangles = 8;
-
-        try
-        {
-            auto created = std::make_shared<WindingNumberOracle>(mesh.getVertices(), mesh.getIndices(), settings);
-            cache[key] = created;
-            tlKey = key;
-            tlOracle = created;
-            return created;
-        }
-        catch (...)
-        {
-            cache.erase(key);
-            return nullptr;
-        }
-    }
-
-    inline static bool robustInside(glm::vec3 point, const Mesh& mesh)
-    {
-        const bool a = rayParityInsideWithDir(point, mesh, glm::vec3(0.852f, 0.231f, 0.468f), 0.0f);
-        const bool b = rayParityInsideWithDir(point, mesh, glm::vec3(-0.217f, 0.931f, 0.293f), 19.19f);
-        const bool c = rayParityInsideWithDir(point, mesh, glm::vec3(0.381f, -0.128f, 0.916f), 37.37f);
-
-        if ((a == b) && (b == c))
-        {
-            return a;
-        }
-
-        const auto oracle = windingOracleForMesh(mesh);
-        if (oracle)
-        {
-            return oracle->inside(point);
-        }
-
-        const int votes = static_cast<int>(a) + static_cast<int>(b) + static_cast<int>(c);
-        return votes >= 2;
     }
     
     /**
@@ -513,36 +391,9 @@ struct NagataTrianglesInfluenceForBuild
                 dXdu, dXdv);
             
             glm::vec3 surfNormal = glm::normalize(glm::cross(dXdu, dXdv));
-            {
-                const glm::vec3 ref = mPatches[bestTriIdx].normals[0] +
-                                      mPatches[bestTriIdx].normals[1] +
-                                      mPatches[bestTriIdx].normals[2];
-                if (!glm::isnan(ref.x + ref.y + ref.z))
-                {
-                    const float refLenSq = glm::dot(ref, ref);
-                    if (refLenSq > 1.0e-12f && glm::dot(surfNormal, ref) < 0.0f)
-                    {
-                        surfNormal = -surfNormal;
-                    }
-                }
-            }
 
             float dotVal = glm::dot(diff, surfNormal);
             float sign = (dotVal < 0.0f) ? -1.0f : 1.0f;
-
-            const float uvEps = 1.0e-5f;
-            const bool uvDegenerate = (bestU <= uvEps) || (bestV <= uvEps) || ((bestU - bestV) <= uvEps) ||
-                                      (bestU >= (1.0f - uvEps)) || (bestV >= (1.0f - uvEps));
-            const bool normalDegenerate = std::isnan(surfNormal.x + surfNormal.y + surfNormal.z) || (glm::length(surfNormal) <= 1.0e-6f);
-            const float dotEps = 1.0e-5f * glm::max(dist, 1.0f);
-            const bool dotDegenerate = std::abs(dotVal) <= dotEps;
-            const bool needOracle = uvDegenerate || normalDegenerate || dotDegenerate;
-
-            if (needOracle)
-            {
-                const bool inside = robustInside(inPoints[i], mesh);
-                sign = inside ? -1.0f : 1.0f;
-            }
             
             glm::vec3 finalGradient;
 
@@ -568,14 +419,13 @@ struct NagataTrianglesInfluenceForBuild
 
             if (dbgAllowLog)
             {
-                SPDLOG_INFO("NagataDebug vtx i={} proj tri={} u={:.6f} v={:.6f} dist={:.6f} dot={:.6f} sign={} oracle={} surfN=({:.6f},{:.6f},{:.6f}) diff=({:.6f},{:.6f},{:.6f})",
+                SPDLOG_INFO("NagataDebug vtx i={} proj tri={} u={:.6f} v={:.6f} dist={:.6f} dot={:.6f} sign={} surfN=({:.6f},{:.6f},{:.6f}) diff=({:.6f},{:.6f},{:.6f})",
                             i,
                             bestTriIdx,
                             bestU, bestV,
                             dist,
                             dotVal,
                             sign,
-                            needOracle ? 1 : 0,
                             surfNormal.x, surfNormal.y, surfNormal.z,
                             diff.x, diff.y, diff.z);
             }

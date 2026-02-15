@@ -21,6 +21,7 @@ namespace NagataPatch
      * @brief Standard computes curve coefficient (Nagata 2005)
      */
     glm::vec3 computeCurvature(glm::vec3 d, glm::vec3 n0, glm::vec3 n1);
+    glm::dvec3 computeCurvatureD(glm::dvec3 d, glm::dvec3 n0, glm::dvec3 n1);
 
     /**
      * @brief Data for a single Nagata Patch (geometric definition)
@@ -67,8 +68,8 @@ namespace NagataPatch
     {
         bool enabled = false;       // Is this edge a crease/crack requiring repair?
         glm::vec3 c_sharp;          // The shared coefficient for this edge
-        float d0 = 0.1f;            // Influence width
-        float inv_d0 = 10.0f;       // 1/d0 for speed
+        float d0 = 0.0f;            // Influence width
+        float inv_d0 = 0.0f;       // 1/d0 for speed
     };
 
     /**

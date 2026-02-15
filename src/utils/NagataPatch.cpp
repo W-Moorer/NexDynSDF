@@ -33,6 +33,29 @@ namespace NagataPatch
         }
     }
 
+    glm::dvec3 computeCurvatureD(glm::dvec3 d, glm::dvec3 n0, glm::dvec3 n1)
+    {
+        static const double angleTol = 0.9999984769;
+        
+        glm::dvec3 v = 0.5 * (n0 + n1);
+        glm::dvec3 Deltav = 0.5 * (n0 - n1);
+        
+        double dv = glm::dot(d, v);
+        double dDeltav = glm::dot(d, Deltav);
+        double Deltac = glm::dot(n0, Deltav);
+        
+        double c = 1.0 - 2.0 * Deltac;
+        
+        if (std::abs(c) <= angleTol)
+        {
+            return (dDeltav / (1.0 - Deltac)) * v + (dv / Deltac) * Deltav;
+        }
+        else
+        {
+            return glm::dvec3(0.0);
+        }
+    }
+
     // =========================================================================
     // Quintic Blending Math
     // =========================================================================
@@ -72,35 +95,16 @@ namespace NagataPatch
             }
             else
             {
-                float d0 = enhance.edges[i].d0;
-                float inv_d0 = enhance.edges[i].inv_d0;
+                float k = enhance.edges[i].d0;
                 float dist = d[i];
                 
-                if(dist <= 0.0f) // On the edge (or outside in specific way)
-                {
-                     res.c_eff[i] = enhance.edges[i].c_sharp;
-                     res.dc_du[i] = glm::vec3(0.0f);
-                     res.dc_dv[i] = glm::vec3(0.0f);
-                }
-                else if(dist >= d0) // Far from edge
-                {
-                     res.c_eff[i] = patch.c_orig[i];
-                     res.dc_du[i] = glm::vec3(0.0f);
-                     res.dc_dv[i] = glm::vec3(0.0f);
-                }
-                else // Blending region
-                {
-                    float s = dist * inv_d0;
-                    float w = smoothStepQuintic(s);
-                    float dw_ds = smoothStepQuinticDeriv(s);
-                    
-                    glm::vec3 diff = patch.c_orig[i] - enhance.edges[i].c_sharp;
-                    res.c_eff[i] = enhance.edges[i].c_sharp + w * diff;
-                    
-                    glm::vec3 factor = diff * dw_ds * inv_d0;
-                    res.dc_du[i] = factor * dd_du[i];
-                    res.dc_dv[i] = factor * dd_dv[i];
-                }
+                glm::vec3 delta = enhance.edges[i].c_sharp - patch.c_orig[i];
+                float damping = std::exp(-k * dist * dist);
+                float ddamping_dd = -2.0f * k * dist * damping;
+                
+                res.c_eff[i] = patch.c_orig[i] + delta * damping;
+                res.dc_du[i] = delta * (ddamping_dd * dd_du[i]);
+                res.dc_dv[i] = delta * (ddamping_dd * dd_dv[i]);
             }
         }
     }

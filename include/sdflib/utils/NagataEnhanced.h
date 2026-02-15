@@ -34,6 +34,7 @@ namespace NagataEnhanced
     
     constexpr char ENG_MAGIC[4] = {'E', 'N', 'G', '\0'};
     constexpr uint32_t ENG_VERSION = 1;
+    constexpr uint32_t ENG_VERSION_DOUBLE = 2;
     constexpr float GAP_THRESHOLD = 1e-4f;
     
     // ============================================================
@@ -74,6 +75,15 @@ namespace NagataEnhanced
         int tri_L, tri_R;         // Adjacent triangle indices
         float max_gap;            // Maximum gap
     };
+
+    struct CreaseEdgeInfoD
+    {
+        glm::dvec3 A, B;
+        glm::dvec3 n_A_L, n_A_R;
+        glm::dvec3 n_B_L, n_B_R;
+        int tri_L, tri_R;
+        double max_gap;
+    };
     
     /**
      * @brief Enhanced Nagata data
@@ -113,11 +123,15 @@ namespace NagataEnhanced
      * @brief Load enhanced data from .eng file
      */
     bool loadEnhancedData(const std::string& filepath, EnhancedNagataData& data);
+
+    bool loadEnhancedDataDouble(const std::string& filepath, std::map<EdgeKey, glm::dvec3>& data);
     
     /**
      * @brief Save enhanced data to .eng file
      */
     bool saveEnhancedData(const std::string& filepath, const EnhancedNagataData& data);
+
+    bool saveEnhancedDataDouble(const std::string& filepath, const std::map<EdgeKey, glm::dvec3>& data);
     
     /**
      * @brief Derive ENG filepath from NSM path
@@ -146,6 +160,12 @@ namespace NagataEnhanced
         const std::vector<std::array<uint32_t, 3>>& faces,
         const std::vector<std::array<glm::vec3, 3>>& faceNormals,
         float gapThreshold = GAP_THRESHOLD);
+
+    std::map<EdgeKey, CreaseEdgeInfoD> detectCreaseEdgesD(
+        const std::vector<glm::dvec3>& vertices,
+        const std::vector<std::array<uint32_t, 3>>& faces,
+        const std::vector<std::array<glm::dvec3, 3>>& faceNormals,
+        double gapThreshold = static_cast<double>(GAP_THRESHOLD));
     
     // ============================================================
     // c_sharp calculation
@@ -155,6 +175,8 @@ namespace NagataEnhanced
      * @brief Compute crease direction (intersection of two tangent planes)
      */
     glm::vec3 computeCreaseDirection(glm::vec3 nL, glm::vec3 nR, glm::vec3 e);
+
+    glm::dvec3 computeCreaseDirectionD(glm::dvec3 nL, glm::dvec3 nR, glm::dvec3 e);
     
     /**
      * @brief Compute shared boundary coefficient c_sharp
@@ -162,12 +184,17 @@ namespace NagataEnhanced
      * Solve for endpoint tangent lengths using least squares
      */
     glm::vec3 computeCSharp(glm::vec3 A, glm::vec3 B, glm::vec3 dA, glm::vec3 dB);
+
+    glm::dvec3 computeCSharpD(glm::dvec3 A, glm::dvec3 B, glm::dvec3 dA, glm::dvec3 dB);
     
     /**
      * @brief Compute c_sharp for all crease edges
      */
     EnhancedNagataData computeCSharpForEdges(
         const std::map<EdgeKey, CreaseEdgeInfo>& creaseEdges);
+
+    std::map<EdgeKey, glm::dvec3> computeCSharpForEdgesD(
+        const std::map<EdgeKey, CreaseEdgeInfoD>& creaseEdges);
     
     // ============================================================
     // Main Entry API
@@ -212,7 +239,7 @@ namespace NagataEnhanced
         float u, float v,
         glm::vec3 c_sharp_1, glm::vec3 c_sharp_2, glm::vec3 c_sharp_3,
         std::array<bool, 3> isCrease,
-        float d0 = 0.1f);
+        float k_factor = 0.0f);
 
     /**
      * @brief Smoothstep derivative
@@ -230,7 +257,7 @@ namespace NagataEnhanced
         float u, float v,
         glm::vec3 c_sharp_1, glm::vec3 c_sharp_2, glm::vec3 c_sharp_3,
         std::array<bool, 3> isCrease,
-        float d0,
+        float k_factor,
         glm::vec3& dXdu, glm::vec3& dXdv);
 
     /**
@@ -241,7 +268,7 @@ namespace NagataEnhanced
         float u, float v,
         glm::vec3 c_sharp_1, glm::vec3 c_sharp_2, glm::vec3 c_sharp_3,
         std::array<bool, 3> isCrease,
-        float d0 = 0.1f);
+        float k_factor = 0.0f);
 
     /**
      * @brief Find nearest point on enhanced Nagata patch (Newton Iteration)

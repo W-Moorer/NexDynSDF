@@ -112,6 +112,14 @@ add_executable(SdfSampler
 
 target_link_libraries(SdfSampler PRIVATE sdflib)
 
+# ============ EngExporter Tool ============
+
+add_executable(EngExporter
+    tools/EngExporter/main.cpp
+)
+
+target_link_libraries(EngExporter PRIVATE sdflib)
+
 # ============ Test Executable ============
 
 add_executable(test_all tests/test_all.cpp)

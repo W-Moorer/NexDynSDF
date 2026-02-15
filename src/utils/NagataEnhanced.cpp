@@ -32,32 +32,125 @@ namespace NagataEnhanced
         file.read(reinterpret_cast<char*>(&numEdges), sizeof(uint32_t));
         file.read(reinterpret_cast<char*>(&reserved), sizeof(uint32_t));
         
-        if (version != ENG_VERSION)
+        if (version != ENG_VERSION && version != ENG_VERSION_DOUBLE)
         {
             std::cerr << "NagataEnhanced: Unsupported ENG version " << version << std::endl;
             return false;
         }
         
-        // Read data
         data.c_sharps.clear();
         for (uint32_t i = 0; i < numEdges; ++i)
         {
             uint32_t v0, v1;
-            float cx, cy, cz;
-            
             file.read(reinterpret_cast<char*>(&v0), sizeof(uint32_t));
             file.read(reinterpret_cast<char*>(&v1), sizeof(uint32_t));
-            file.read(reinterpret_cast<char*>(&cx), sizeof(float));
-            file.read(reinterpret_cast<char*>(&cy), sizeof(float));
-            file.read(reinterpret_cast<char*>(&cz), sizeof(float));
             
-            if (!file)
+            if (version == ENG_VERSION_DOUBLE)
             {
-                std::cerr << "NagataEnhanced: ENG file data incomplete" << std::endl;
-                return false;
+                double cx, cy, cz;
+                file.read(reinterpret_cast<char*>(&cx), sizeof(double));
+                file.read(reinterpret_cast<char*>(&cy), sizeof(double));
+                file.read(reinterpret_cast<char*>(&cz), sizeof(double));
+                
+                if (!file)
+                {
+                    std::cerr << "NagataEnhanced: ENG file data incomplete" << std::endl;
+                    return false;
+                }
+                
+                data.c_sharps[EdgeKey(v0, v1)] = glm::vec3(
+                    static_cast<float>(cx),
+                    static_cast<float>(cy),
+                    static_cast<float>(cz));
             }
+            else
+            {
+                float cx, cy, cz;
+                file.read(reinterpret_cast<char*>(&cx), sizeof(float));
+                file.read(reinterpret_cast<char*>(&cy), sizeof(float));
+                file.read(reinterpret_cast<char*>(&cz), sizeof(float));
+                
+                if (!file)
+                {
+                    std::cerr << "NagataEnhanced: ENG file data incomplete" << std::endl;
+                    return false;
+                }
+                
+                data.c_sharps[EdgeKey(v0, v1)] = glm::vec3(cx, cy, cz);
+            }
+        }
+        
+        std::cout << "NagataEnhanced: Loaded " << numEdges << " crease edges from " << filepath << std::endl;
+        return true;
+    }
+
+    bool loadEnhancedDataDouble(const std::string& filepath, std::map<EdgeKey, glm::dvec3>& data)
+    {
+        std::ifstream file(filepath, std::ios::binary);
+        if (!file.is_open())
+        {
+            return false;
+        }
+        
+        char magic[4];
+        file.read(magic, 4);
+        if (std::memcmp(magic, ENG_MAGIC, 4) != 0)
+        {
+            std::cerr << "NagataEnhanced: Invalid ENG file magic" << std::endl;
+            return false;
+        }
+        
+        uint32_t version, numEdges, reserved;
+        file.read(reinterpret_cast<char*>(&version), sizeof(uint32_t));
+        file.read(reinterpret_cast<char*>(&numEdges), sizeof(uint32_t));
+        file.read(reinterpret_cast<char*>(&reserved), sizeof(uint32_t));
+        
+        if (version != ENG_VERSION && version != ENG_VERSION_DOUBLE)
+        {
+            std::cerr << "NagataEnhanced: Unsupported ENG version " << version << std::endl;
+            return false;
+        }
+        
+        data.clear();
+        for (uint32_t i = 0; i < numEdges; ++i)
+        {
+            uint32_t v0, v1;
+            file.read(reinterpret_cast<char*>(&v0), sizeof(uint32_t));
+            file.read(reinterpret_cast<char*>(&v1), sizeof(uint32_t));
             
-            data.c_sharps[EdgeKey(v0, v1)] = glm::vec3(cx, cy, cz);
+            if (version == ENG_VERSION_DOUBLE)
+            {
+                double cx, cy, cz;
+                file.read(reinterpret_cast<char*>(&cx), sizeof(double));
+                file.read(reinterpret_cast<char*>(&cy), sizeof(double));
+                file.read(reinterpret_cast<char*>(&cz), sizeof(double));
+                
+                if (!file)
+                {
+                    std::cerr << "NagataEnhanced: ENG file data incomplete" << std::endl;
+                    return false;
+                }
+                
+                data[EdgeKey(v0, v1)] = glm::dvec3(cx, cy, cz);
+            }
+            else
+            {
+                float cx, cy, cz;
+                file.read(reinterpret_cast<char*>(&cx), sizeof(float));
+                file.read(reinterpret_cast<char*>(&cy), sizeof(float));
+                file.read(reinterpret_cast<char*>(&cz), sizeof(float));
+                
+                if (!file)
+                {
+                    std::cerr << "NagataEnhanced: ENG file data incomplete" << std::endl;
+                    return false;
+                }
+                
+                data[EdgeKey(v0, v1)] = glm::dvec3(
+                    static_cast<double>(cx),
+                    static_cast<double>(cy),
+                    static_cast<double>(cz));
+            }
         }
         
         std::cout << "NagataEnhanced: Loaded " << numEdges << " crease edges from " << filepath << std::endl;
@@ -95,6 +188,41 @@ namespace NagataEnhanced
             file.write(reinterpret_cast<const char*>(&cx), sizeof(float));
             file.write(reinterpret_cast<const char*>(&cy), sizeof(float));
             file.write(reinterpret_cast<const char*>(&cz), sizeof(float));
+        }
+        
+        std::cout << "NagataEnhanced: Saved " << numEdges << " crease edges to " << filepath << std::endl;
+        return true;
+    }
+
+    bool saveEnhancedDataDouble(const std::string& filepath, const std::map<EdgeKey, glm::dvec3>& data)
+    {
+        std::ofstream file(filepath, std::ios::binary);
+        if (!file.is_open())
+        {
+            std::cerr << "NagataEnhanced: Cannot create file " << filepath << std::endl;
+            return false;
+        }
+        
+        file.write(ENG_MAGIC, 4);
+        uint32_t version = ENG_VERSION_DOUBLE;
+        uint32_t numEdges = static_cast<uint32_t>(data.size());
+        uint32_t reserved = 0;
+        
+        file.write(reinterpret_cast<const char*>(&version), sizeof(uint32_t));
+        file.write(reinterpret_cast<const char*>(&numEdges), sizeof(uint32_t));
+        file.write(reinterpret_cast<const char*>(&reserved), sizeof(uint32_t));
+        
+        for (const auto& [key, c] : data)
+        {
+            uint32_t v0 = key.v0;
+            uint32_t v1 = key.v1;
+            double cx = c.x, cy = c.y, cz = c.z;
+            
+            file.write(reinterpret_cast<const char*>(&v0), sizeof(uint32_t));
+            file.write(reinterpret_cast<const char*>(&v1), sizeof(uint32_t));
+            file.write(reinterpret_cast<const char*>(&cx), sizeof(double));
+            file.write(reinterpret_cast<const char*>(&cy), sizeof(double));
+            file.write(reinterpret_cast<const char*>(&cz), sizeof(double));
         }
         
         std::cout << "NagataEnhanced: Saved " << numEdges << " crease edges to " << filepath << std::endl;
@@ -221,6 +349,105 @@ namespace NagataEnhanced
         
         return creaseEdges;
     }
+
+    std::map<EdgeKey, CreaseEdgeInfoD> detectCreaseEdgesD(
+        const std::vector<glm::dvec3>& vertices,
+        const std::vector<std::array<uint32_t, 3>>& faces,
+        const std::vector<std::array<glm::dvec3, 3>>& faceNormals,
+        double gapThreshold)
+    {
+        struct EdgeTriInfo
+        {
+            int triIdx;
+            uint32_t v0, v1;
+            int local0, local1;
+        };
+        
+        std::map<EdgeKey, std::vector<EdgeTriInfo>> edgeToTris;
+        
+        for (size_t triIdx = 0; triIdx < faces.size(); ++triIdx)
+        {
+            const auto& tri = faces[triIdx];
+            std::array<std::tuple<int, int, int, int>, 3> edges = {{
+                {0, 1, 0, 1},
+                {1, 2, 1, 2},
+                {0, 2, 0, 2}
+            }};
+            
+            for (const auto& [l0, l1, local0, local1] : edges)
+            {
+                EdgeKey key(tri[l0], tri[l1]);
+                EdgeTriInfo info;
+                info.triIdx = static_cast<int>(triIdx);
+                info.v0 = tri[l0];
+                info.v1 = tri[l1];
+                info.local0 = local0;
+                info.local1 = local1;
+                edgeToTris[key].push_back(info);
+            }
+        }
+        
+        std::map<EdgeKey, CreaseEdgeInfoD> creaseEdges;
+        
+        for (const auto& [edgeKey, trisInfo] : edgeToTris)
+        {
+            if (trisInfo.size() != 2)
+                continue;
+            
+            const auto& triL = trisInfo[0];
+            const auto& triR = trisInfo[1];
+            
+            glm::dvec3 A = vertices[edgeKey.v0];
+            glm::dvec3 B = vertices[edgeKey.v1];
+            
+            auto getNormalAtVertex = [&](int triIdx, uint32_t globalVIdx) -> glm::dvec3
+            {
+                const auto& tri = faces[triIdx];
+                for (int i = 0; i < 3; ++i)
+                {
+                    if (tri[i] == globalVIdx)
+                        return faceNormals[triIdx][i];
+                }
+                return glm::dvec3(0.0, 0.0, 1.0);
+            };
+            
+            glm::dvec3 n_A_L = getNormalAtVertex(triL.triIdx, edgeKey.v0);
+            glm::dvec3 n_B_L = getNormalAtVertex(triL.triIdx, edgeKey.v1);
+            glm::dvec3 n_A_R = getNormalAtVertex(triR.triIdx, edgeKey.v0);
+            glm::dvec3 n_B_R = getNormalAtVertex(triR.triIdx, edgeKey.v1);
+            
+            glm::dvec3 e = B - A;
+            glm::dvec3 c_L = NagataPatch::computeCurvatureD(e, n_A_L, n_B_L);
+            glm::dvec3 c_R = NagataPatch::computeCurvatureD(e, n_A_R, n_B_R);
+            
+            double maxGap = 0.0;
+            for (int i = 0; i <= 10; ++i)
+            {
+                double t = static_cast<double>(i) / 10.0;
+                glm::dvec3 p_L = (1.0 - t) * A + t * B - c_L * t * (1.0 - t);
+                glm::dvec3 p_R = (1.0 - t) * A + t * B - c_R * t * (1.0 - t);
+                double gap = glm::length(p_L - p_R);
+                maxGap = std::max(maxGap, gap);
+            }
+            
+            if (maxGap > gapThreshold)
+            {
+                CreaseEdgeInfoD info;
+                info.A = A;
+                info.B = B;
+                info.n_A_L = n_A_L;
+                info.n_A_R = n_A_R;
+                info.n_B_L = n_B_L;
+                info.n_B_R = n_B_R;
+                info.tri_L = triL.triIdx;
+                info.tri_R = triR.triIdx;
+                info.max_gap = maxGap;
+                creaseEdges[edgeKey] = info;
+            }
+        }
+        
+        return creaseEdges;
+    }
     
     // ============================================================
     // c_sharp calculation
@@ -239,6 +466,24 @@ namespace NagataEnhanced
         d = d / len;
         
         if (glm::dot(d, e) < 0.0f)
+            d = -d;
+        
+        return d;
+    }
+
+    glm::dvec3 computeCreaseDirectionD(glm::dvec3 nL, glm::dvec3 nR, glm::dvec3 e)
+    {
+        glm::dvec3 d = glm::cross(nL, nR);
+        double len = glm::length(d);
+        
+        if (len < 1e-8)
+        {
+            return glm::normalize(e);
+        }
+        
+        d = d / len;
+        
+        if (glm::dot(d, e) < 0.0)
             d = -d;
         
         return d;
@@ -285,6 +530,48 @@ namespace NagataEnhanced
         
         return c_sharp;
     }
+
+    glm::dvec3 computeCSharpD(glm::dvec3 A, glm::dvec3 B, glm::dvec3 dA, glm::dvec3 dB)
+    {
+        glm::dvec3 e = B - A;
+        
+        if (glm::dot(dA, dB) < 0.0)
+            dB = -dB;
+        
+        double G00 = glm::dot(dA, dA);
+        double G01 = glm::dot(dA, dB);
+        double G11 = glm::dot(dB, dB);
+        double r0 = 2.0 * glm::dot(e, dA);
+        double r1 = 2.0 * glm::dot(e, dB);
+        
+        double lambda = 1e-6;
+        G00 += lambda;
+        G11 += lambda;
+        
+        double det = G00 * G11 - G01 * G01;
+        if (std::abs(det) < 1e-12)
+        {
+            return glm::dvec3(0.0);
+        }
+        
+        double lA = (G11 * r0 - G01 * r1) / det;
+        double lB = (-G01 * r0 + G00 * r1) / det;
+        
+        glm::dvec3 T_A = lA * dA;
+        glm::dvec3 T_B = lB * dB;
+        
+        glm::dvec3 c_sharp = 0.5 * (T_B - T_A);
+        
+        double eLen = glm::length(e);
+        double cLen = glm::length(c_sharp);
+        double maxC = 2.0 * eLen;
+        if (cLen > maxC)
+        {
+            c_sharp = c_sharp * (maxC / cLen);
+        }
+        
+        return c_sharp;
+    }
     
     EnhancedNagataData computeCSharpForEdges(
         const std::map<EdgeKey, CreaseEdgeInfo>& creaseEdges)
@@ -301,6 +588,26 @@ namespace NagataEnhanced
             glm::vec3 c_sharp = computeCSharp(info.A, info.B, dA, dB);
             
             data.c_sharps[edgeKey] = c_sharp;
+        }
+        
+        return data;
+    }
+
+    std::map<EdgeKey, glm::dvec3> computeCSharpForEdgesD(
+        const std::map<EdgeKey, CreaseEdgeInfoD>& creaseEdges)
+    {
+        std::map<EdgeKey, glm::dvec3> data;
+        
+        for (const auto& [edgeKey, info] : creaseEdges)
+        {
+            glm::dvec3 e = info.B - info.A;
+            
+            glm::dvec3 dA = computeCreaseDirectionD(info.n_A_L, info.n_A_R, e);
+            glm::dvec3 dB = computeCreaseDirectionD(info.n_B_L, info.n_B_R, e);
+            
+            glm::dvec3 c_sharp = computeCSharpD(info.A, info.B, dA, dB);
+            
+            data[edgeKey] = c_sharp;
         }
         
         return data;
@@ -356,13 +663,24 @@ namespace NagataEnhanced
         t = std::clamp(t, 0.0f, 1.0f);
         return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
     }
+
+    float gaussianDecay(float d, float k)
+    {
+        return std::exp(-k * d * d);
+    }
+
+    float gaussianDecayDeriv(float d, float k)
+    {
+        float w = gaussianDecay(d, k);
+        return -2.0f * k * d * w;
+    }
     
     glm::vec3 evaluateSurfaceEnhanced(
         const NagataPatch::NagataPatchData& patch,
         float u, float v,
         glm::vec3 c_sharp_1, glm::vec3 c_sharp_2, glm::vec3 c_sharp_3,
         std::array<bool, 3> isCrease,
-        float d0)
+        float k_factor)
     {
         const glm::vec3& x00 = patch.vertices[0];
         const glm::vec3& x10 = patch.vertices[1];
@@ -382,9 +700,8 @@ namespace NagataEnhanced
             if (!isCreaseEdge)
                 return c_orig;
             
-            float s = std::clamp(d / d0, 0.0f, 1.0f);
-            float w = smoothstep(s);  
-            return (1.0f - w) * c_sharp + w * c_orig;
+            float w = gaussianDecay(d, k_factor);
+            return c_orig + (c_sharp - c_orig) * w;
         };
         
         glm::vec3 c1_eff = blendCoeff(c1_orig, c_sharp_1, d1, isCrease[0]);
@@ -412,7 +729,7 @@ namespace NagataEnhanced
         float u, float v,
         glm::vec3 c_sharp_1, glm::vec3 c_sharp_2, glm::vec3 c_sharp_3,
         std::array<bool, 3> isCrease,
-        float d0,
+        float k_factor,
         glm::vec3& dXdu, glm::vec3& dXdv)
     {
         const glm::vec3& x00 = patch.vertices[0];
@@ -426,9 +743,8 @@ namespace NagataEnhanced
         auto getCoeff = [&](const glm::vec3& c_orig, const glm::vec3& c_sharp, float d, bool isCrease) 
         {
             if (!isCrease) return c_orig;
-            float s = std::clamp(d / d0, 0.0f, 1.0f);
-            float w = smoothstep(s);
-            return (1.0f - w) * c_sharp + w * c_orig;
+            float w = gaussianDecay(d, k_factor);
+            return c_orig + (c_sharp - c_orig) * w;
         };
 
         glm::vec3 c1 = getCoeff(patch.c_orig[0], c_sharp_1, d1, isCrease[0]);
@@ -445,22 +761,25 @@ namespace NagataEnhanced
                             - c2 * (u - 2.0f * v) 
                             - c3 * (1.0f - u);
         
-        auto getDwDd = [&](float d, bool isCrease) -> float
+        auto getDampingDeriv = [&](float d, bool isCrease) -> float
         {
             if (!isCrease) return 0.0f;
-            if (d < 0.0f || d > d0) return 0.0f;
-            return smoothstepDeriv(d / d0) / d0;
+            return gaussianDecayDeriv(d, k_factor);
         };
 
-        float dw1_dv = getDwDd(d1, isCrease[0]);
-        glm::vec3 dc1_dv = (patch.c_orig[0] - c_sharp_1) * dw1_dv;
+        glm::vec3 delta1 = c_sharp_1 - patch.c_orig[0];
+        glm::vec3 delta2 = c_sharp_2 - patch.c_orig[1];
+        glm::vec3 delta3 = c_sharp_3 - patch.c_orig[2];
 
-        float dw2_du = getDwDd(d2, isCrease[1]) * (-1.0f);
-        glm::vec3 dc2_du = (patch.c_orig[1] - c_sharp_2) * dw2_du;
+        float dd1_dv = getDampingDeriv(d1, isCrease[0]);
+        glm::vec3 dc1_dv = delta1 * dd1_dv;
 
-        float dw3_raw = getDwDd(d3, isCrease[2]);
-        glm::vec3 dc3_du = (patch.c_orig[2] - c_sharp_3) * dw3_raw;
-        glm::vec3 dc3_dv = (patch.c_orig[2] - c_sharp_3) * (-dw3_raw);
+        float dd2_du = getDampingDeriv(d2, isCrease[1]) * (-1.0f);
+        glm::vec3 dc2_du = delta2 * dd2_du;
+
+        float dd3_raw = getDampingDeriv(d3, isCrease[2]);
+        glm::vec3 dc3_du = delta3 * dd3_raw;
+        glm::vec3 dc3_dv = delta3 * (-dd3_raw);
 
         float B1 = (1.0f - u) * (u - v);
         float B2 = (u - v) * v;
@@ -475,10 +794,10 @@ namespace NagataEnhanced
         float u, float v,
         glm::vec3 c_sharp_1, glm::vec3 c_sharp_2, glm::vec3 c_sharp_3,
         std::array<bool, 3> isCrease,
-        float d0)
+        float k_factor)
     {
         glm::vec3 dXdu, dXdv;
-        evaluateDerivativesEnhanced(patch, u, v, c_sharp_1, c_sharp_2, c_sharp_3, isCrease, d0, dXdu, dXdv);
+        evaluateDerivativesEnhanced(patch, u, v, c_sharp_1, c_sharp_2, c_sharp_3, isCrease, k_factor, dXdu, dXdv);
         
         glm::vec3 normal = glm::cross(dXdu, dXdv);
         float len = glm::length(normal);
@@ -522,7 +841,7 @@ namespace NagataEnhanced
         glm::vec3 c1 = enhancedData.getCSharpOriented(vertexIndices[0], vertexIndices[1]);
         glm::vec3 c2 = enhancedData.getCSharpOriented(vertexIndices[1], vertexIndices[2]);
         glm::vec3 c3 = enhancedData.getCSharpOriented(vertexIndices[0], vertexIndices[2]);
-        float d0 = 0.1f; 
+        float k_factor = 0.0f; 
 
         // Initial guess: multi-point sampling
         minU = 0.333f; minV = 0.166f;
@@ -540,11 +859,11 @@ namespace NagataEnhanced
             
             for (int iter = 0; iter < 10; ++iter)
             {
-                glm::vec3 surfacePoint = evaluateSurfaceEnhanced(patch, u, v, c1, c2, c3, isCrease, d0);
+                glm::vec3 surfacePoint = evaluateSurfaceEnhanced(patch, u, v, c1, c2, c3, isCrease, k_factor);
                 glm::vec3 diffVec = surfacePoint - point;
 
                 glm::vec3 dXdu, dXdv;
-                evaluateDerivativesEnhanced(patch, u, v, c1, c2, c3, isCrease, d0, dXdu, dXdv);
+                evaluateDerivativesEnhanced(patch, u, v, c1, c2, c3, isCrease, k_factor, dXdu, dXdv);
                 
                 float gradU = glm::dot(diffVec, dXdu);
                 float gradV = glm::dot(diffVec, dXdv);
@@ -570,7 +889,7 @@ namespace NagataEnhanced
                 if (std::abs(deltaU) < 1e-5f && std::abs(deltaV) < 1e-5f) break;
             }
             
-            glm::vec3 p = evaluateSurfaceEnhanced(patch, u, v, c1, c2, c3, isCrease, d0);
+            glm::vec3 p = evaluateSurfaceEnhanced(patch, u, v, c1, c2, c3, isCrease, k_factor);
             float d2 = glm::dot(point - p, point - p);
             if (d2 < minDistSq)
             {

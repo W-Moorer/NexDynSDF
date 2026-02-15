@@ -87,6 +87,50 @@ namespace MeshBinaryLoader
             }
         }
     };
+
+    struct MeshDataDouble
+    {
+        std::vector<glm::dvec3> vertices;
+        std::vector<std::array<uint32_t, 3>> faces;
+        std::vector<std::array<glm::dvec3, 3>> faceNormals;
+        
+        size_t getNumVertices() const { return vertices.size(); }
+        size_t getNumFaces() const { return faces.size(); }
+        
+        std::array<glm::dvec3, 3> getFaceVertices(size_t faceIndex) const
+        {
+            std::array<glm::dvec3, 3> result;
+            for (int i = 0; i < 3; ++i)
+            {
+                result[i] = vertices[faces[faceIndex][i]];
+            }
+            return result;
+        }
+        
+        std::array<glm::dvec3, 3> getFaceVertexNormals(size_t faceIndex) const
+        {
+            return faceNormals[faceIndex];
+        }
+        
+        void computeBounds(glm::dvec3& minBound, glm::dvec3& maxBound) const
+        {
+            if (vertices.empty())
+            {
+                minBound = glm::dvec3(0.0);
+                maxBound = glm::dvec3(0.0);
+                return;
+            }
+            
+            minBound = vertices[0];
+            maxBound = vertices[0];
+            
+            for (const auto& v : vertices)
+            {
+                minBound = glm::min(minBound, v);
+                maxBound = glm::max(maxBound, v);
+            }
+        }
+    };
     
     /**
      * @brief Load mesh data from binary file
@@ -352,6 +396,93 @@ namespace MeshBinaryLoader
                 meshData.faceNormals[i][j] = glm::vec3(static_cast<float>(nx),
                                                         static_cast<float>(ny),
                                                         static_cast<float>(nz));
+            }
+        }
+        
+        if (!file)
+        {
+            std::cerr << "MeshBinaryLoader: NSM data read failed" << std::endl;
+            meshData.vertices.clear();
+            meshData.faces.clear();
+            meshData.faceNormals.clear();
+            return meshData;
+        }
+        
+        std::cout << "MeshBinaryLoader: Successfully loaded NSM file " << filepath << std::endl;
+        std::cout << "  Vertices: " << numVertices << std::endl;
+        std::cout << "  Triangles: " << numTriangles << std::endl;
+        
+        return meshData;
+    }
+
+    inline MeshDataDouble loadFromNSMDouble(const std::string& filepath)
+    {
+        MeshDataDouble meshData;
+        
+        std::ifstream file(filepath, std::ios::binary);
+        if (!file.is_open())
+        {
+            std::cerr << "MeshBinaryLoader: Cannot open NSM file " << filepath << std::endl;
+            return meshData;
+        }
+        
+        char header[64];
+        file.read(header, 64);
+        if (!file)
+        {
+            std::cerr << "MeshBinaryLoader: NSM header incomplete" << std::endl;
+            return meshData;
+        }
+        
+        if (header[0] != 'N' || header[1] != 'S' || header[2] != 'M' || header[3] != '\0')
+        {
+            std::cerr << "MeshBinaryLoader: Invalid NSM magic" << std::endl;
+            return meshData;
+        }
+        
+        uint32_t version = *reinterpret_cast<uint32_t*>(header + 4);
+        uint32_t numVertices = *reinterpret_cast<uint32_t*>(header + 8);
+        uint32_t numTriangles = *reinterpret_cast<uint32_t*>(header + 12);
+        
+        if (version != 1)
+        {
+            std::cerr << "MeshBinaryLoader: Unsupported NSM version " << version << std::endl;
+            return meshData;
+        }
+        
+        meshData.vertices.resize(numVertices);
+        meshData.faces.resize(numTriangles);
+        meshData.faceNormals.resize(numTriangles);
+        
+        for (uint32_t i = 0; i < numVertices; ++i)
+        {
+            double x, y, z;
+            file.read(reinterpret_cast<char*>(&x), sizeof(double));
+            file.read(reinterpret_cast<char*>(&y), sizeof(double));
+            file.read(reinterpret_cast<char*>(&z), sizeof(double));
+            meshData.vertices[i] = glm::dvec3(x, y, z);
+        }
+        
+        for (uint32_t i = 0; i < numTriangles; ++i)
+        {
+            uint32_t i0, i1, i2;
+            file.read(reinterpret_cast<char*>(&i0), sizeof(uint32_t));
+            file.read(reinterpret_cast<char*>(&i1), sizeof(uint32_t));
+            file.read(reinterpret_cast<char*>(&i2), sizeof(uint32_t));
+            meshData.faces[i] = {i0, i1, i2};
+        }
+        
+        file.seekg(numTriangles * sizeof(uint32_t), std::ios::cur);
+        
+        for (uint32_t i = 0; i < numTriangles; ++i)
+        {
+            for (int j = 0; j < 3; ++j)
+            {
+                double nx, ny, nz;
+                file.read(reinterpret_cast<char*>(&nx), sizeof(double));
+                file.read(reinterpret_cast<char*>(&ny), sizeof(double));
+                file.read(reinterpret_cast<char*>(&nz), sizeof(double));
+                meshData.faceNormals[i][j] = glm::dvec3(nx, ny, nz);
             }
         }
         
