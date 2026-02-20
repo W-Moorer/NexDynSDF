@@ -110,6 +110,7 @@ static bool test_crease_csharp_orientation()
         const NagataEnhanced::EdgeKey k01(vi[0], vi[1]);
         const NagataEnhanced::EdgeKey k12(vi[1], vi[2]);
         const NagataEnhanced::EdgeKey k02(vi[0], vi[2]);
+        const float kFactor = 0.1f;
 
         const std::array<bool, 3> isCrease = {
             enhancedData.hasEdge(k01),
@@ -128,6 +129,9 @@ static bool test_crease_csharp_orientation()
         enhance.edges[0].c_sharp = c1;
         enhance.edges[1].c_sharp = c2;
         enhance.edges[2].c_sharp = c3;
+        enhance.edges[0].k_factor = kFactor;
+        enhance.edges[1].k_factor = kFactor;
+        enhance.edges[2].k_factor = kFactor;
 
         return NagataPatch::evaluateSurface(patch, enhance, u, v);
     };
@@ -326,17 +330,17 @@ int main(int argc, char* argv[])
     // Verification: Hybrid should be significantly more accurate
     if (avgErrorHybrid < avgErrorBaseline * 0.1f)
     {
-        std::cout << "\n✓ PASS: Hybrid accuracy is >10x better" << std::endl;
+        std::cout << "\n PASS: Hybrid accuracy is >10x better" << std::endl;
         return 0;
     }
     else if (avgErrorHybrid < avgErrorBaseline * 0.5f)
     {
-        std::cout << "\n⚠ PARTIAL: Hybrid is better but <10x improvement" << std::endl;
+        std::cout << "\n PARTIAL: Hybrid is better but <10x improvement" << std::endl;
         return 0;
     }
     else
     {
-        std::cout << "\n✗ FAIL: Hybrid accuracy not significantly improved" << std::endl;
+        std::cout << "\n FAIL: Hybrid accuracy not significantly improved" << std::endl;
         return 1;
     }
 }

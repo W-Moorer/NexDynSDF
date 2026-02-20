@@ -171,7 +171,7 @@ namespace NagataEnhanced
         const std::vector<glm::vec3>& vertices,
         const std::vector<std::array<uint32_t, 3>>& faces,
         const std::vector<std::array<glm::vec3, 3>>& faceNormals,
-        float k_factor = 0.0f);
+        float k_factor = 0.1f);
     
     // ============================================================
     // Main Entry API

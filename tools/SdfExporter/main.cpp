@@ -143,7 +143,6 @@ int main(int argc, char** argv)
     SPDLOG_INFO("Threads: {}", opts.numThreads);
 
     sdflib::Timer timer;
-    // Build SDF
     timer.start();
     std::unique_ptr<sdflib::SdfFunction> sdf;
     sdflib::BoundingBox box;
@@ -224,6 +223,7 @@ int main(int argc, char** argv)
             // 3. Convert EnhancedNagataData to PatchEnhancementData vector
             // Note: PatchEnhancementData is a simpler format used by NagataTrianglesInfluenceForBuild
             enhanced.resize(patches.size());
+            const float kFactor = 0.1f;
 
             size_t enabledEdgesTotal = 0;
             for (size_t i = 0; i < meshData.faces.size() && i < enhanced.size(); ++i)
@@ -238,6 +238,7 @@ int main(int argc, char** argv)
 
                     pe.edges[edgeIdx].enabled = true;
                     pe.edges[edgeIdx].c_sharp = enhancedData.getCSharpOriented(a, b);
+                    pe.edges[edgeIdx].k_factor = kFactor;
                     enabledEdgesTotal++;
                 };
 
