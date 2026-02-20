@@ -7,11 +7,104 @@ Nagata Patch计算模块
 
 import numpy as np
 from dataclasses import dataclass
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List, Dict, Any
 
 
 # 角度容差: 当法向量夹角小于0.1度时，退化为线性插值
 ANGLE_TOL = np.cos(0.1 * np.pi / 180)
+
+def _aabb_distance_sq(point: np.ndarray, aabb_min: np.ndarray, aabb_max: np.ndarray) -> float:
+    d = np.maximum(0.0, np.maximum(aabb_min - point, point - aabb_max))
+    return float(np.dot(d, d))
+
+
+@dataclass(eq=False)
+class _BvhNode:
+    aabb_min: np.ndarray
+    aabb_max: np.ndarray
+    left: Optional["_BvhNode"] = None
+    right: Optional["_BvhNode"] = None
+    indices: Optional[np.ndarray] = None
+
+
+class _FeatureBvh:
+    def __init__(self, aabb_mins: np.ndarray, aabb_maxs: np.ndarray, centers: np.ndarray, leaf_size: int = 16):
+        self.aabb_mins = aabb_mins
+        self.aabb_maxs = aabb_maxs
+        self.centers = centers
+        self.leaf_size = int(max(1, leaf_size))
+        self.root = self._build(np.arange(centers.shape[0], dtype=np.int32))
+
+    def _build(self, indices: np.ndarray) -> _BvhNode:
+        mins = np.min(self.aabb_mins[indices], axis=0)
+        maxs = np.max(self.aabb_maxs[indices], axis=0)
+
+        if indices.shape[0] <= self.leaf_size:
+            return _BvhNode(aabb_min=mins, aabb_max=maxs, indices=indices)
+
+        span = maxs - mins
+        axis = int(np.argmax(span))
+        order = np.argsort(self.centers[indices, axis])
+        indices = indices[order]
+        mid = indices.shape[0] // 2
+
+        left = self._build(indices[:mid])
+        right = self._build(indices[mid:])
+        return _BvhNode(aabb_min=mins, aabb_max=maxs, left=left, right=right)
+
+    def query_k(self, point: np.ndarray, k: int) -> List[int]:
+        import heapq
+
+        k = int(max(1, k))
+        best = []
+        seq = 0
+        heap = [(0.0, seq, self.root)]
+        seq += 1
+
+        worst_best = float("inf")
+
+        while heap:
+            dist_lb, _, node = heapq.heappop(heap)
+            if dist_lb > worst_best:
+                break
+
+            if node.indices is not None:
+                for idx in node.indices:
+                    idx_i = int(idx)
+                    d = _aabb_distance_sq(point, self.aabb_mins[idx_i], self.aabb_maxs[idx_i])
+                    if len(best) < k:
+                        best.append((d, idx_i))
+                        if len(best) == k:
+                            best.sort()
+                            worst_best = best[-1][0]
+                    else:
+                        if d < worst_best:
+                            best[-1] = (d, idx_i)
+                            best.sort()
+                            worst_best = best[-1][0]
+                continue
+
+            if node.left is not None:
+                d_left = _aabb_distance_sq(point, node.left.aabb_min, node.left.aabb_max)
+                if d_left <= worst_best:
+                    heapq.heappush(heap, (d_left, seq, node.left))
+                    seq += 1
+            if node.right is not None:
+                d_right = _aabb_distance_sq(point, node.right.aabb_min, node.right.aabb_max)
+                if d_right <= worst_best:
+                    heapq.heappush(heap, (d_right, seq, node.right))
+                    seq += 1
+
+        best.sort()
+        return [idx for _, idx in best[:k]]
+
+
+@dataclass
+class _Feature:
+    feature_type: str
+    ref: Any
+    aabb_min: np.ndarray
+    aabb_max: np.ndarray
 
 
 def compute_curvature(d: np.ndarray, n0: np.ndarray, n1: np.ndarray) -> np.ndarray:
@@ -342,10 +435,12 @@ def compute_c_sharp(A: np.ndarray, B: np.ndarray,
 
 def smoothstep(t: np.ndarray) -> np.ndarray:
     """
-    五次光滑过渡函数
+    五次光滑过渡函数 (已弃用，保留用于兼容)
     
     w = 6t^5 - 15t^4 + 10t^3
     满足 w(0)=0, w(1)=1, w'(0)=w'(1)=0
+    
+    注意: 此函数存在"平顶"问题，建议使用 quartic_bell 替代
     
     Args:
         t: 输入参数, 可以是标量或数组, 应在 [0, 1] 范围内
@@ -357,18 +452,88 @@ def smoothstep(t: np.ndarray) -> np.ndarray:
     return 6 * t**5 - 15 * t**4 + 10 * t**3
 
 
+def quartic_bell(s: np.ndarray) -> np.ndarray:
+    """
+    四次钟形衰减权重函数 (Quartic Bell Decay) - v2 方案
+    
+    w(s) = (1 - s²)², 当 0 ≤ s ≤ 1
+    w(s) = 0, 当 s > 1
+    
+    特性:
+    - w(0) = 1: 边界处完全替换
+    - w'(0) = 0: 边界处导数为零，保持法向连续
+    - 无平顶: 离开边界后立即衰减，避免凹槽伪影
+    - C² 连续: 在 s=1 处光滑过渡到零
+    
+    注意: 此函数仍使用硬截断，建议使用 gaussian_decay (v3) 替代
+    
+    Args:
+        s: 归一化距离参数 (s = d / d_threshold)
+        
+    Returns:
+        w: 权重值，范围 [0, 1]
+    """
+    s = np.clip(s, 0, 1)
+    return (1.0 - s * s) ** 2
+
+
+def gaussian_decay(d: np.ndarray, k: float = 0.0) -> np.ndarray:
+    """
+    高斯指数衰减函数 (v3 方案 - 推荐)
+    
+    w(d) = exp(-k * d²)
+    
+    特性:
+    - w(0) = 1: 边界处完全修复裂隙
+    - w'(0) = 0: 边界处导数为零，保持法向连续
+    - 无截断: 全局光滑，C^∞ 可导
+    - 无拐点: 不会产生"肩部"或"坑洼"
+    
+    参数 k 的选择:
+    - k = 0: 纯净几何模式，最光滑的结果（推荐）
+    - k = 10~20: 局部约束模式，限制修正范围
+    
+    相比 quartic_bell 的优势:
+    - 无硬截断: 没有 if dist < threshold 的判断
+    - 无限光滑: C^∞ 连续，不会产生任何视觉伪影
+    - 自然衰减: 像弹簧钢板受力后的自然形变
+    
+    Args:
+        d: 到边界的距离
+        k: 衰减系数 (0 = 无衰减，10~20 = 局部化)
+        
+    Returns:
+        w: 权重值，范围 (0, 1]
+    """
+    return np.exp(-k * d * d)
+
+
 def evaluate_nagata_patch_with_crease(
     x00: np.ndarray, x10: np.ndarray, x11: np.ndarray,
     c1_orig: np.ndarray, c2_orig: np.ndarray, c3_orig: np.ndarray,
     c1_sharp: np.ndarray, c2_sharp: np.ndarray, c3_sharp: np.ndarray,
-    is_crease: tuple,  # (bool, bool, bool) for edges 1, 2, 3
+    is_crease: tuple,
     u: np.ndarray, v: np.ndarray,
-    d0: float = 0.1
+    k_factor: float = 0.0,
+    enforce_constraints: bool = True
 ) -> np.ndarray:
     """
-    带折痕修复的 Nagata 曲面求值
+    带折痕修复的 Nagata 曲面求值 (v3: 自然结构传播)
     
-    对标记为裂隙边的 c_i，根据到边距离进行融合。
+    采用结构化补偿形式:
+    x_final(u,v) = x_orig(u,v) - Sum(Psi_i)
+    
+    其中 Psi_i 是第 i 条边的结构化修正项:
+    Psi_i = delta_c * Basis * exp(-k * d²)
+    
+    核心改进 (v3):
+    - 无硬截断: 废弃 if dist < threshold 逻辑
+    - 高斯衰减: 使用 exp(-k*d²)，C^∞ 光滑
+    - 自然同调: 利用 Nagata 基函数作为传播载体
+    
+    参数 k_factor 的选择:
+    - k = 0: 纯净几何模式，最光滑结果（推荐）
+    - k = 10~20: 局部约束模式，限制修正范围
     
     Args:
         x00, x10, x11: 三角形顶点坐标
@@ -376,35 +541,13 @@ def evaluate_nagata_patch_with_crease(
         c1_sharp, c2_sharp, c3_sharp: 裂隙修复系数
         is_crease: 三条边是否为裂隙边
         u, v: 参数坐标
-        d0: 融合宽度参数
+        k_factor: 高斯衰减系数 (0=无衰减，10~20=局部化)
         
     Returns:
         points: 曲面采样点坐标
     """
     u = np.atleast_1d(u)
     v = np.atleast_1d(v)
-    
-    # 计算到各边的距离参数
-    # 边1: v=0, d1=v
-    # 边2: u=1, d2=1-u
-    # 边3: u=v, d3=u-v
-    d1 = v
-    d2 = 1 - u
-    d3 = u - v
-    
-    # 计算有效的 c_i^eff
-    def blend_c(c_orig, c_sharp, is_cr, d):
-        if not is_cr:
-            return c_orig
-        s = np.clip(d / d0, 0, 1)
-        w = smoothstep(s)
-        # w=0 时用 c_sharp, w=1 时用 c_orig
-        return (1 - w)[:, None] * c_sharp + w[:, None] * c_orig
-    
-    # 对每个采样点计算有效系数
-    c1_eff = blend_c(c1_orig, c1_sharp, is_crease[0], d1)
-    c2_eff = blend_c(c2_orig, c2_sharp, is_crease[1], d2)
-    c3_eff = blend_c(c3_orig, c3_sharp, is_crease[2], d3)
     
     # 线性项
     one_minus_u = 1 - u
@@ -414,25 +557,153 @@ def evaluate_nagata_patch_with_crease(
               x10 * u_minus_v[:, None] + 
               x11 * v[:, None])
     
-    # 二次修正项 (每个点有不同的 c_eff)
-    quadratic = (c1_eff * (one_minus_u * u_minus_v)[:, None] +
-                 c2_eff * (u_minus_v * v)[:, None] +
-                 c3_eff * (one_minus_u * v)[:, None])
+    # 原始二次修正项
+    quadratic_orig = (c1_orig * (one_minus_u * u_minus_v)[:, None] +
+                      c2_orig * (u_minus_v * v)[:, None] +
+                      c3_orig * (one_minus_u * v)[:, None])
     
-    points = linear - quadratic
+    # 计算修正项 (Correction) - v3: 高斯衰减，无硬截断
+    correction = np.zeros((len(u), 3))
+    
+    # 边1: v=0, d1=v, 基函数 (1-u)(u-v)
+    if is_crease[0]:
+        d1 = v
+        delta_c1 = c1_sharp - c1_orig
+        basis1 = one_minus_u * u_minus_v
+        damping1 = gaussian_decay(d1, k_factor)
+        correction -= delta_c1 * basis1[:, None] * damping1[:, None]
+    
+    # 边2: u=1, d2=1-u, 基函数 (u-v)v
+    if is_crease[1]:
+        d2 = 1 - u
+        delta_c2 = c2_sharp - c2_orig
+        basis2 = u_minus_v * v
+        damping2 = gaussian_decay(d2, k_factor)
+        correction -= delta_c2 * basis2[:, None] * damping2[:, None]
+    
+    # 边3: u=v, d3=u-v, 基函数 (1-u)v
+    if is_crease[2]:
+        d3 = u - v
+        delta_c3 = c3_sharp - c3_orig
+        basis3 = one_minus_u * v
+        damping3 = gaussian_decay(d3, k_factor)
+        correction -= delta_c3 * basis3[:, None] * damping3[:, None]
+    
+    points = linear - quadratic_orig + correction
+    if not enforce_constraints or not any(is_crease):
+        return points
+
+    n_ref = _compute_reference_normal(x00, x10, x11, None, None, None)
+    if n_ref is None:
+        return points
+
+    for idx in range(len(u)):
+        uu = float(u[idx])
+        vv = float(v[idx])
+        orig_point = evaluate_nagata_patch(
+            x00, x10, x11,
+            c1_orig, c2_orig, c3_orig,
+            np.array([uu]), np.array([vv])
+        ).flatten()
+        dXdu, dXdv = evaluate_nagata_derivatives(
+            x00, x10, x11, c1_orig, c2_orig, c3_orig,
+            uu, vv,
+            is_crease=is_crease,
+            c_sharps=(c1_sharp, c2_sharp, c3_sharp),
+            k_factor=k_factor
+        )
+        jacobian = float(np.dot(np.cross(dXdu, dXdv), n_ref))
+        if jacobian <= 0.0:
+            points[idx] = orig_point
+            continue
+        points[idx] = _apply_edge_crossing_guard(
+            orig_point,
+            points[idx],
+            x00, x10, x11,
+            c1_sharp, c2_sharp, c3_sharp,
+            is_crease,
+            uu, vv,
+            n_ref
+        )
     return points
+
+
+def _safe_normalize(vec: np.ndarray, eps: float = 1e-12) -> Optional[np.ndarray]:
+    norm = np.linalg.norm(vec)
+    if norm < eps:
+        return None
+    return vec / norm
+
+
+def _compute_reference_normal(
+    x00: np.ndarray,
+    x10: np.ndarray,
+    x11: np.ndarray,
+    n00: Optional[np.ndarray],
+    n10: Optional[np.ndarray],
+    n11: Optional[np.ndarray],
+) -> Optional[np.ndarray]:
+    tri_normal = _safe_normalize(np.cross(x10 - x00, x11 - x00))
+    if tri_normal is not None:
+        return tri_normal
+    if n00 is None or n10 is None or n11 is None:
+        return None
+    return _safe_normalize(n00 + n10 + n11)
+
+
+def _apply_edge_crossing_guard(
+    x_orig: np.ndarray,
+    x_new: np.ndarray,
+    x00: np.ndarray,
+    x10: np.ndarray,
+    x11: np.ndarray,
+    c1_sharp: np.ndarray,
+    c2_sharp: np.ndarray,
+    c3_sharp: np.ndarray,
+    is_crease: tuple,
+    u: float,
+    v: float,
+    n_ref: Optional[np.ndarray],
+) -> np.ndarray:
+    if n_ref is None:
+        return x_new
+
+    edges = [
+        (x00, x10, x11, c1_sharp, u),
+        (x10, x11, x00, c2_sharp, v),
+        (x00, x11, x10, c3_sharp, v),
+    ]
+
+    for edge_idx, (a, b, opp, c_sharp, t) in enumerate(edges):
+        if not is_crease[edge_idx]:
+            continue
+        e = b - a
+        side_dir = _safe_normalize(np.cross(n_ref, e))
+        if side_dir is None:
+            continue
+        if np.dot(side_dir, opp - (a + b) * 0.5) < 0:
+            side_dir = -side_dir
+        t_clamped = float(np.clip(t, 0.0, 1.0))
+        edge_point = (1.0 - t_clamped) * a + t_clamped * b - c_sharp * t_clamped * (1.0 - t_clamped)
+        s_new = float(np.dot(x_new - edge_point, side_dir))
+        if s_new < 0.0:
+            x_new = x_new - s_new * side_dir
+
+    return x_new
 
 
 def sample_nagata_triangle_with_crease(
     x00: np.ndarray, x10: np.ndarray, x11: np.ndarray,
     n00: np.ndarray, n10: np.ndarray, n11: np.ndarray,
-    c_sharps: dict,  # {edge_key: c_sharp}
-    edge_keys: tuple,  # 三条边的全局键
+    c_sharps: dict,
+    edge_keys: tuple,
     resolution: int = 10,
-    d0: float = 0.1
+    k_factor: float = 0.0,
+    guard_edge_crossing: bool = True,
+    enforce_jacobian: bool = True
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    带折痕修复的单三角形 Nagata 采样
+    带折痕修复的单三角形 Nagata 采样 (v3: 自然结构传播)
     
     Args:
         x00, x10, x11: 三角形顶点坐标
@@ -440,7 +711,7 @@ def sample_nagata_triangle_with_crease(
         c_sharps: 裂隙边的共享系数字典
         edge_keys: 三条边的全局键 (边1, 边2, 边3)
         resolution: 采样密度
-        d0: 融合宽度
+        k_factor: 高斯衰减系数 (0=无衰减，10~20=局部化)
         
     Returns:
         vertices, faces: 采样结果
@@ -471,6 +742,8 @@ def sample_nagata_triangle_with_crease(
     vertices = []
     vertex_map = {}
     
+    n_ref = _compute_reference_normal(x00, x10, x11, n00, n10, n11) if guard_edge_crossing else None
+
     for i, u in enumerate(u_vals):
         for j, v in enumerate(v_vals):
             if v <= u + 1e-10:
@@ -480,8 +753,25 @@ def sample_nagata_triangle_with_crease(
                     c1_sharp, c2_sharp, c3_sharp,
                     tuple(is_crease),
                     np.array([u]), np.array([v]),
-                    d0
+                    k_factor,
+                    enforce_constraints=enforce_jacobian or guard_edge_crossing
                 )
+                if guard_edge_crossing and any(is_crease):
+                    orig_point = evaluate_nagata_patch(
+                        x00, x10, x11,
+                        c1_orig, c2_orig, c3_orig,
+                        np.array([u]), np.array([v])
+                    ).flatten()
+                    guarded_point = _apply_edge_crossing_guard(
+                        orig_point,
+                        point.flatten(),
+                        x00, x10, x11,
+                        c1_sharp, c2_sharp, c3_sharp,
+                        tuple(is_crease),
+                        float(u), float(v),
+                        n_ref
+                    )
+                    point = guarded_point.reshape(1, 3)
                 vertex_map[(i, j)] = len(vertices)
                 vertices.append(point.flatten())
     
@@ -514,95 +804,114 @@ def sample_nagata_triangle_with_crease(
 # =============================================================================
 
 def smoothstep_deriv(t: np.ndarray) -> np.ndarray:
-    """五次光滑过渡函数的导数: w'(t) = 30t^2(t-1)^2"""
+    """
+    五次光滑过渡函数的导数 (已弃用，保留用于兼容)
+    
+    w'(t) = 30t²(t-1)²
+    
+    注意: 建议使用 quartic_bell_deriv 替代
+    """
     t = np.clip(t, 0, 1)
     term = t * (t - 1.0)
     return 30.0 * term * term
+
+
+def quartic_bell_deriv(s: np.ndarray) -> np.ndarray:
+    """
+    四次钟形衰减权重函数的导数 (v2 方案)
+    
+    w(s) = (1 - s²)²
+    w'(s) = -4s(1 - s²)
+    
+    注意: 建议使用 gaussian_decay_deriv (v3) 替代
+    
+    Args:
+        s: 归一化距离参数
+        
+    Returns:
+        dw/ds: 权重函数的导数
+    """
+    s = np.clip(s, 0, 1)
+    return -4.0 * s * (1.0 - s * s)
+
+
+def gaussian_decay_deriv(d: np.ndarray, k: float = 0.0) -> np.ndarray:
+    """
+    高斯指数衰减函数的导数 (v3 方案 - 推荐)
+    
+    w(d) = exp(-k * d²)
+    w'(d) = -2k * d * exp(-k * d²)
+    
+    特性:
+    - w'(0) = 0: 边界处导数为零
+    - 全局光滑: C^∞ 可导
+    
+    Args:
+        d: 到边界的距离
+        k: 衰减系数
+        
+    Returns:
+        dw/dd: 权重函数对距离的导数
+    """
+    w = np.exp(-k * d * d)
+    return -2.0 * k * d * w
+
 
 def evaluate_nagata_derivatives(
     x00: np.ndarray, x10: np.ndarray, x11: np.ndarray,
     c1: np.ndarray, c2: np.ndarray, c3: np.ndarray,
     u: float, v: float,
-    # 可选: 折痕相关参数
     is_crease: tuple = (False, False, False),
     c_sharps: tuple = (None, None, None), 
-    d0: float = 0.1
+    k_factor: float = 0.0
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     计算 Nagata 曲面的一阶偏导数 (dX/du, dX/dv)
-    支持折痕融合逻辑
+    支持折痕融合逻辑 (v3: 自然结构传播)
+    
+    采用修正项形式的导数:
+    dX/du = dX_orig/du + d(Correction)/du
+    
+    其中:
+    Correction = -delta_c * basis * exp(-k * d²)
+    d(Correction)/du = -delta_c * [dbasis/du * damping + basis * ddamping/du]
+    ddamping/du = ddamping/dd * dd/du = -2k*d*exp(-k*d²) * dd/du
+    
+    Args:
+        x00, x10, x11: 三角形顶点坐标
+        c1, c2, c3: 原始曲率系数
+        u, v: 参数坐标
+        is_crease: 三条边是否为裂隙边
+        c_sharps: 裂隙修复系数
+        k_factor: 高斯衰减系数 (0=无衰减)
+        
+    Returns:
+        dXdu, dXdv: 曲面在 u, v 方向的偏导数
     """
     # 基础几何导数 (线性部分)
-    # x(u,v)_linear = x00(1-u) + x10(u-v) + x11*v
-    # dLin/du = -x00 + x10
-    # dLin/dv = -x10 + x11
     dLin_du = -x00 + x10
     dLin_dv = -x10 + x11
     
-    # 二次项系数混合处理
     # 距离参数定义
-    d_params = [v, 1.0 - u, u - v] # d1(v), d2(1-u), d3(u-v)
+    d_params = [v, 1.0 - u, u - v]
     
     # 距离对 (u,v) 的导数 [dd/du, dd/dv]
     dd_du = [0.0, -1.0, 1.0]
     dd_dv = [1.0, 0.0, -1.0]
     
-    # 准备系数及其导数
+    # 准备系数
     coeffs = [c1, c2, c3]
-    # Handle None in c_sharps
     sharp_coeffs = [c if s is None else s for c, s in zip(coeffs, c_sharps)]
     
-    c_eff = []
-    dc_du = []
-    dc_dv = []
-    
-    for i in range(3):
-        if not is_crease[i]:
-            c_eff.append(coeffs[i])
-            dc_du.append(np.zeros(3))
-            dc_dv.append(np.zeros(3))
-        else:
-            dist = d_params[i]
-            c_orig = coeffs[i]
-            c_sharp = sharp_coeffs[i]
-            
-            if dist <= 0:
-                c_eff.append(c_sharp)
-                dc_du.append(np.zeros(3))
-                dc_dv.append(np.zeros(3))
-            elif dist >= d0:
-                c_eff.append(c_orig)
-                dc_du.append(np.zeros(3))
-                dc_dv.append(np.zeros(3))
-            else:
-                s = dist / d0
-                w = smoothstep(s)
-                dw_ds = smoothstep_deriv(s)
-                
-                # c_eff = (1-w)c_sharp + w*c_orig
-                #       = c_sharp + w(c_orig - c_sharp)
-                diff = c_orig - c_sharp
-                c_val = c_sharp + w * diff
-                c_eff.append(c_val)
-                
-                # Chain rule
-                # dc/du = dc/dw * dw/ds * ds/dd * dd/du
-                factor = diff * dw_ds * (1.0 / d0)
-                dc_du.append(factor * dd_du[i])
-                dc_dv.append(factor * dd_dv[i])
-    
     # 二次基函数及其导数
-    # b1 = (1-u)(u-v)
     b1 = (1.0 - u) * (u - v)
     db1_du = 1.0 - 2.0 * u + v
     db1_dv = u - 1.0
     
-    # b2 = (u-v)v
     b2 = (u - v) * v
     db2_du = v
     db2_dv = u - 2.0 * v
     
-    # b3 = (1-u)v
     b3 = (1.0 - u) * v
     db3_du = -v
     db3_dv = 1.0 - u
@@ -611,20 +920,39 @@ def evaluate_nagata_derivatives(
     db_du_list = [db1_du, db2_du, db3_du]
     db_dv_list = [db1_dv, db2_dv, db3_dv]
     
+    # 原始二次项导数
     dQ_du = np.zeros(3)
     dQ_dv = np.zeros(3)
     
     for i in range(3):
-        # term i: C_i * B_i
-        # d/du = dC/du * B + C * dB/du
-        term_du = dc_du[i] * bases[i] + c_eff[i] * db_du_list[i]
-        term_dv = dc_dv[i] * bases[i] + c_eff[i] * db_dv_list[i]
+        dQ_du += coeffs[i] * db_du_list[i]
+        dQ_dv += coeffs[i] * db_dv_list[i]
+    
+    # 修正项导数 - v3: 高斯衰减
+    dCorr_du = np.zeros(3)
+    dCorr_dv = np.zeros(3)
+    
+    for i in range(3):
+        if not is_crease[i]:
+            continue
         
-        dQ_du += term_du
-        dQ_dv += term_dv
+        dist = d_params[i]
+        delta_c = sharp_coeffs[i] - coeffs[i]
         
-    dXdu = dLin_du - dQ_du
-    dXdv = dLin_dv - dQ_dv
+        # 高斯衰减及其导数
+        damping = gaussian_decay(np.array([dist]), k_factor)[0]
+        ddamping_dd = gaussian_decay_deriv(np.array([dist]), k_factor)[0]
+        
+        # ddamping/du = ddamping/dd * dd/du
+        ddamping_du = ddamping_dd * dd_du[i]
+        ddamping_dv = ddamping_dd * dd_dv[i]
+        
+        # d(Correction)/du = -delta_c * [dbasis/du * damping + basis * ddamping/du]
+        dCorr_du -= delta_c * (db_du_list[i] * damping + bases[i] * ddamping_du)
+        dCorr_dv -= delta_c * (db_dv_list[i] * damping + bases[i] * ddamping_dv)
+    
+    dXdu = dLin_du - dQ_du + dCorr_du
+    dXdv = dLin_dv - dQ_dv + dCorr_dv
     
     return dXdu, dXdv
 
@@ -634,12 +962,13 @@ def find_nearest_point_on_patch(
     c1: np.ndarray, c2: np.ndarray, c3: np.ndarray,
     is_crease: tuple = (False, False, False),
     c_sharps: tuple = (None, None, None),
-    d0: float = 0.1,
+    k_factor: float = 0.0,
     max_iter: int = 15
 ) -> Tuple[np.ndarray, float, float, float]:
     """
     使用 Newton-Raphson 算法寻找单个 Patch 上的最近点
-    (Robust Version: Multiple Restarts)
+    (Robust Version: Multiple Restarts, v3: 自然结构传播)
+    
     Returns: (nearest_point, distance, u, v)
     """
     # 候选初始点列表 (u, v)
@@ -728,11 +1057,11 @@ def find_nearest_point_on_patch(
                 P_surf = evaluate_nagata_patch_with_crease(
                     x00, x10, x11, c1, c2, c3, 
                     c_sharps[0], c_sharps[1], c_sharps[2],
-                    is_crease, u_arr, v_arr, d0
+                    is_crease, u_arr, v_arr, k_factor
                 ).flatten()
                 dXdu, dXdv = evaluate_nagata_derivatives(
                     x00, x10, x11, c1, c2, c3, u, v,
-                    is_crease, c_sharps, d0
+                    is_crease, c_sharps, k_factor
                 )
             else:
                 P_surf = evaluate_nagata_patch(
@@ -791,7 +1120,7 @@ def find_nearest_point_on_patch(
         
         if any(is_crease):
              P_final = evaluate_nagata_patch_with_crease(
-                x00, x10, x11, c1, c2, c3, c_sharps[0], c_sharps[1], c_sharps[2], is_crease, np.array([u]), np.array([v]), d0
+                x00, x10, x11, c1, c2, c3, c_sharps[0], c_sharps[1], c_sharps[2], is_crease, np.array([u]), np.array([v]), k_factor
             ).flatten()
         else:
             P_final = evaluate_nagata_patch(x00, x10, x11, c1, c2, c3, np.array([u]), np.array([v])).flatten()
@@ -809,7 +1138,7 @@ class NagataModelQuery:
     提供对整个 NSM 模型的最近点查询功能
     (Enhanced: 支持折痕自动检测与 c_sharp 修复)
     """
-    def __init__(self, vertices: np.ndarray, triangles: np.ndarray, tri_vertex_normals: np.ndarray):
+    def __init__(self, vertices: np.ndarray, triangles: np.ndarray, tri_vertex_normals: np.ndarray, nsm_filepath: Optional[str] = None):
         self.vertices = vertices
         self.triangles = triangles
         self.normals = tri_vertex_normals
@@ -843,13 +1172,9 @@ class NagataModelQuery:
             self.use_kdtree = False
             print("警告: 未找到 scipy.spatial.KDTree，将使用暴力搜索 (速度较慢)。")
             
-        # =========================================================
-        # 折痕预计算 (Crease Precomputation)
-        # =========================================================
-        self.crease_map = {} # map edge_key -> c_sharp
-        
-        # 1. 构建边缘拓扑 edge -> list of (tri_idx, local_edge_idx)
-        print("正在构建边缘拓扑以检测折痕...")
+        self.crease_map = {}
+
+        print("正在构建边缘拓扑...")
         edge_to_tris = {} # (min_v, max_v) -> list of tri_idx
         
         for t_idx in range(len(triangles)):
@@ -868,67 +1193,35 @@ class NagataModelQuery:
                     edge_to_tris[e_key] = []
                 edge_to_tris[e_key].append(t_idx)
                 
-        # 2. 检测折痕并计算 c_sharp
-        crease_count = 0
-        sharpness_threshold = 0.9999 # cos(angle), > this means smooth
-        
-        for e_key, tri_indices in edge_to_tris.items():
-            if len(tri_indices) != 2:
-                continue # 边界边或非流形，暂时跳过修复
-                
-            t1 = tri_indices[0]
-            t2 = tri_indices[1]
-            
-            # 获取对应的顶点索引和法向量
-            def get_edge_data(t_idx, v_a, v_b):
-                tri = triangles[t_idx]
-                norms = tri_vertex_normals[t_idx]
-                
-                # Find local indices
-                try:
-                    idx_a = -1
-                    idx_b = -1
-                    for k in range(3):
-                        if tri[k] == v_a: idx_a = k
-                        if tri[k] == v_b: idx_b = k
-                    
-                    if idx_a == -1 or idx_b == -1: return None, None
-                        
-                    return norms[idx_a], norms[idx_b]
-                except:
-                    return None, None
+        if nsm_filepath:
+            try:
+                from nagata_storage import get_eng_filepath, has_cached_data, load_enhanced_data
+                if has_cached_data(nsm_filepath):
+                    eng_path = get_eng_filepath(nsm_filepath)
+                    cached = load_enhanced_data(eng_path)
+                    if cached:
+                        self.crease_map = cached
+                        print(f"已加载 {len(self.crease_map)} 条折痕边数据从: {eng_path}")
+                    else:
+                        print("ENG 缓存为空，折痕修复关闭。")
+                else:
+                    print("未找到 ENG 缓存，折痕修复关闭。")
+            except Exception as e:
+                print(f"ENG 加载失败: {e}")
 
-            vA, vB = e_key
-            nA_1, nB_1 = get_edge_data(t1, vA, vB)
-            nA_2, nB_2 = get_edge_data(t2, vA, vB)
-            
-            if nA_1 is None or nA_2 is None: continue
-            
-            # Check consistency
-            dot_A = np.dot(nA_1, nA_2)
-            dot_B = np.dot(nB_1, nB_2)
-            
-            # 如果任何一个端点的法向量不一致，视为折痕
-            if dot_A < sharpness_threshold or dot_B < sharpness_threshold:
-                # 是折痕，计算 c_sharp
-                posA = self.vertices[vA]
-                posB = self.vertices[vB]
-                edge_vec = posB - posA
-                
-                # 计算切向方向 d_A, d_B
-                d_A = compute_crease_direction(nA_1, nA_2, edge_vec)
-                d_B = compute_crease_direction(nB_1, nB_2, edge_vec)
-                
-                # 计算 c_sharp
-                c_sharp = compute_c_sharp(posA, posB, d_A, d_B)
-                
-                self.crease_map[e_key] = c_sharp
-                crease_count += 1
-                
-        if crease_count > 0:
-            print(f"检测到 {crease_count} 条折痕边，已启用 c_sharp 修复。")
-        else:
-            print("未检测到显著折痕，以完全光滑模式运行。")
+        self.edge_to_tris = edge_to_tris
+        vertex_to_tris = {}
+        for t_idx in range(len(triangles)):
+            tri = triangles[t_idx]
+            for local_idx in range(3):
+                v_idx = int(tri[local_idx])
+                if v_idx not in vertex_to_tris:
+                    vertex_to_tris[v_idx] = []
+                vertex_to_tris[v_idx].append((t_idx, local_idx))
+        self.vertex_to_tris = vertex_to_tris
+        self._features = []
+        self._feature_bvh = None
+        self._build_feature_bvh()
             
     def _get_patch_crease_info(self, idx: int):
         """Helper to get crease query params for a triangle"""
@@ -953,6 +1246,510 @@ class NagataModelQuery:
                 c_sharps[k] = self.crease_map[edges[k]]
                 
         return tuple(is_crease), tuple(c_sharps)
+
+    def _get_candidate_triangle_indices(self, point: np.ndarray, k_nearest: int) -> List[int]:
+        if self.use_kdtree:
+            _, indices = self.kdtree.query(point, k=min(k_nearest, len(self.centroids)))
+            if isinstance(indices, (int, np.integer)):
+                return [int(indices)]
+            return [int(i) for i in indices]
+        return [int(i) for i in range(len(self.centroids))]
+
+    def _build_feature_bvh(self):
+        features = []
+
+        for tri_idx in range(len(self.triangles)):
+            tri_v_idx = self.triangles[tri_idx]
+            x00 = self.vertices[int(tri_v_idx[0])]
+            x10 = self.vertices[int(tri_v_idx[1])]
+            x11 = self.vertices[int(tri_v_idx[2])]
+
+            pts = [x00, x10, x11]
+            for u, v in [(0.666, 0.333), (0.5, 0.0), (1.0, 0.5), (0.5, 0.5)]:
+                p, _, _ = self._eval_patch_point_and_derivatives(tri_idx, float(u), float(v))
+                pts.append(p)
+            pts = np.stack(pts, axis=0)
+
+            aabb_min = np.min(pts, axis=0)
+            aabb_max = np.max(pts, axis=0)
+            features.append(_Feature("FACE", int(tri_idx), aabb_min, aabb_max))
+
+        for edge_key, tri_indices in self.edge_to_tris.items():
+            vA, vB = int(edge_key[0]), int(edge_key[1])
+            posA = self.vertices[vA]
+            posB = self.vertices[vB]
+            pts = [posA, posB]
+
+            tri_idx0 = int(tri_indices[0])
+            local_edge_idx = self._local_edge_index_for_edge_key(tri_idx0, (vA, vB))
+            if local_edge_idx is not None:
+                u_m, v_m = self._uv_on_edge(int(local_edge_idx), 0.5)
+                p_m, _, _ = self._eval_patch_point_and_derivatives(tri_idx0, float(u_m), float(v_m))
+                pts.append(p_m)
+
+            pts = np.stack(pts, axis=0)
+            aabb_min = np.min(pts, axis=0)
+            aabb_max = np.max(pts, axis=0)
+            f_type = "SHARPEDGE" if edge_key in self.crease_map else "EDGE"
+            features.append(_Feature(f_type, (vA, vB), aabb_min, aabb_max))
+
+        for v_idx in range(self.vertices.shape[0]):
+            p = self.vertices[int(v_idx)]
+            features.append(_Feature("VERTEX", int(v_idx), p.copy(), p.copy()))
+
+        self._features = features
+        aabb_mins = np.stack([f.aabb_min for f in features], axis=0)
+        aabb_maxs = np.stack([f.aabb_max for f in features], axis=0)
+        centers = 0.5 * (aabb_mins + aabb_maxs)
+        self._feature_bvh = _FeatureBvh(aabb_mins, aabb_maxs, centers, leaf_size=32)
+
+    def _uv_on_edge(self, local_edge_idx: int, t: float) -> Tuple[float, float]:
+        t = float(np.clip(t, 0.0, 1.0))
+        if local_edge_idx == 0:
+            return (t, 0.0)
+        if local_edge_idx == 1:
+            return (1.0, t)
+        return (t, t)
+
+    def _local_edge_index_for_edge_key(self, tri_idx: int, edge_key: Tuple[int, int]) -> Optional[int]:
+        tri = self.triangles[tri_idx]
+        edges = [
+            tuple(sorted((int(tri[0]), int(tri[1])))),
+            tuple(sorted((int(tri[1]), int(tri[2])))),
+            tuple(sorted((int(tri[0]), int(tri[2])))),
+        ]
+        for k in range(3):
+            if edges[k] == edge_key:
+                return k
+        return None
+
+    def _eval_patch_point_and_derivatives(self, tri_idx: int, u: float, v: float, k_factor: float = 0.0):
+        tri_v_idx = self.triangles[tri_idx]
+        x00 = self.vertices[int(tri_v_idx[0])]
+        x10 = self.vertices[int(tri_v_idx[1])]
+        x11 = self.vertices[int(tri_v_idx[2])]
+        c1, c2, c3 = self.patch_coeffs[tri_idx]
+        is_crease, c_sharps = self._get_patch_crease_info(tri_idx)
+
+        if any(is_crease):
+            p = evaluate_nagata_patch_with_crease(
+                x00,
+                x10,
+                x11,
+                c1,
+                c2,
+                c3,
+                c_sharps[0],
+                c_sharps[1],
+                c_sharps[2],
+                is_crease,
+                np.array([u]),
+                np.array([v]),
+                k_factor,
+            ).flatten()
+            dXdu, dXdv = evaluate_nagata_derivatives(
+                x00, x10, x11, c1, c2, c3, u, v, is_crease=is_crease, c_sharps=c_sharps, k_factor=k_factor
+            )
+        else:
+            p = evaluate_nagata_patch(x00, x10, x11, c1, c2, c3, np.array([u]), np.array([v])).flatten()
+            dXdu, dXdv = evaluate_nagata_derivatives(x00, x10, x11, c1, c2, c3, u, v)
+
+        return p, dXdu, dXdv
+
+    def _eval_patch_normal(self, tri_idx: int, u: float, v: float) -> np.ndarray:
+        _, dXdu, dXdv = self._eval_patch_point_and_derivatives(tri_idx, u, v)
+        n = np.cross(dXdu, dXdv)
+        n_len = float(np.linalg.norm(n))
+        if n_len > 1e-12:
+            return n / n_len
+        return np.array([0.0, 0.0, 1.0], dtype=float)
+
+    def _optimize_edge(self, point: np.ndarray, tri_idx: int, local_edge_idx: int, t0: float, max_iter: int = 20):
+        t = float(np.clip(t0, 0.0, 1.0))
+        best_t = t
+        best_dist_sq = float("inf")
+        best_p = None
+
+        for _ in range(max_iter):
+            u, v = self._uv_on_edge(local_edge_idx, t)
+            p, dXdu, dXdv = self._eval_patch_point_and_derivatives(tri_idx, u, v)
+
+            if local_edge_idx == 0:
+                dXdt = dXdu
+            elif local_edge_idx == 1:
+                dXdt = dXdv
+            else:
+                dXdt = dXdu + dXdv
+
+            diff = p - point
+            F = float(np.dot(diff, dXdt))
+            H = float(np.dot(dXdt, dXdt))
+            if H < 1e-14:
+                break
+
+            dt = -F / H
+            if abs(dt) > 0.25:
+                dt = 0.25 * np.sign(dt)
+
+            t_new = float(np.clip(t + dt, 0.0, 1.0))
+
+            dist_sq = float(np.sum((p - point) ** 2))
+            if dist_sq < best_dist_sq:
+                best_dist_sq = dist_sq
+                best_t = t
+                best_p = p
+
+            if abs(t_new - t) < 1e-8:
+                t = t_new
+                break
+            t = t_new
+
+        if best_p is None:
+            u, v = self._uv_on_edge(local_edge_idx, best_t)
+            best_p, _, _ = self._eval_patch_point_and_derivatives(tri_idx, u, v)
+            best_dist_sq = float(np.sum((best_p - point) ** 2))
+
+        return best_p, float(np.sqrt(best_dist_sq)), best_t
+
+    def _is_interior_uv(self, u: float, v: float, eps: float) -> bool:
+        return (u > eps) and (u < 1.0 - eps) and (v > eps) and (v < u - eps)
+
+    def _project_to_domain_geometry(self, point: np.ndarray, tri_idx: int, u_free: float, v_free: float):
+        if (0.0 <= v_free <= u_free <= 1.0):
+            p, _, _ = self._eval_patch_point_and_derivatives(tri_idx, float(u_free), float(v_free))
+            dist = float(np.linalg.norm(p - point))
+            return p, dist, float(u_free), float(v_free)
+
+        tri_v_idx = self.triangles[tri_idx]
+        a = self.vertices[int(tri_v_idx[0])]
+        b = self.vertices[int(tri_v_idx[1])]
+        c = self.vertices[int(tri_v_idx[2])]
+
+        candidates = []
+
+        ab = b - a
+        ab_len2 = float(np.dot(ab, ab))
+        t0 = float(np.dot(point - a, ab) / ab_len2) if ab_len2 > 1e-14 else 0.0
+        p_e, d_e, t_e = self._optimize_edge(point, tri_idx, 0, t0)
+        u_e, v_e = self._uv_on_edge(0, t_e)
+        candidates.append((p_e, d_e, u_e, v_e))
+
+        bc = c - b
+        bc_len2 = float(np.dot(bc, bc))
+        t1 = float(np.dot(point - b, bc) / bc_len2) if bc_len2 > 1e-14 else 0.0
+        p_e, d_e, t_e = self._optimize_edge(point, tri_idx, 1, t1)
+        u_e, v_e = self._uv_on_edge(1, t_e)
+        candidates.append((p_e, d_e, u_e, v_e))
+
+        ac = c - a
+        ac_len2 = float(np.dot(ac, ac))
+        t2 = float(np.dot(point - a, ac) / ac_len2) if ac_len2 > 1e-14 else 0.0
+        p_e, d_e, t_e = self._optimize_edge(point, tri_idx, 2, t2)
+        u_e, v_e = self._uv_on_edge(2, t_e)
+        candidates.append((p_e, d_e, u_e, v_e))
+
+        corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]
+        for u_c, v_c in corners:
+            p_c, _, _ = self._eval_patch_point_and_derivatives(tri_idx, u_c, v_c)
+            d_c = float(np.linalg.norm(p_c - point))
+            candidates.append((p_c, d_c, u_c, v_c))
+
+        best = min(candidates, key=lambda x: x[1])
+        return best
+
+    def _face_project_multi_start(self, point: np.ndarray, tri_idx: int, max_iter: int = 15):
+        tri_v_idx = self.triangles[tri_idx]
+        x00 = self.vertices[int(tri_v_idx[0])]
+        x10 = self.vertices[int(tri_v_idx[1])]
+        x11 = self.vertices[int(tri_v_idx[2])]
+
+        candidates = [
+            (0.666, 0.333),
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.5, 0.0),
+            (1.0, 0.5),
+            (0.5, 0.5),
+        ]
+
+        edge1 = x10 - x00
+        edge2 = x11 - x00
+        normal = np.cross(edge1, edge2)
+        area_sq = float(np.dot(normal, normal))
+        if area_sq > 1e-12:
+            w = point - x00
+            s = float(np.dot(np.cross(w, edge2), normal) / area_sq)
+            t = float(np.dot(np.cross(edge1, w), normal) / area_sq)
+            u_proj = float(np.clip(s + t, 0.0, 1.0))
+            v_proj = float(np.clip(t, 0.0, u_proj))
+            candidates.insert(0, (u_proj, v_proj))
+
+        best_dist_sq = float("inf")
+        best_u = 0.0
+        best_v = 0.0
+        best_p = None
+
+        seen = set()
+        unique_candidates = []
+        for u0, v0 in candidates:
+            key = (round(float(u0), 3), round(float(v0), 3))
+            if key not in seen:
+                seen.add(key)
+                unique_candidates.append((float(u0), float(v0)))
+
+        for start_u, start_v in unique_candidates:
+            u = start_u
+            v = start_v
+            for _ in range(max_iter):
+                p, dXdu, dXdv = self._eval_patch_point_and_derivatives(tri_idx, u, v)
+
+                diff = p - point
+                F_u = float(np.dot(diff, dXdu))
+                F_v = float(np.dot(diff, dXdv))
+
+                H_uu = float(np.dot(dXdu, dXdu))
+                H_uv = float(np.dot(dXdu, dXdv))
+                H_vv = float(np.dot(dXdv, dXdv))
+
+                det = H_uu * H_vv - H_uv * H_uv
+                if abs(det) < 1e-12:
+                    du = -0.1 * F_u
+                    dv = -0.1 * F_v
+                else:
+                    inv_det = 1.0 / det
+                    du = (H_vv * (-F_u) - H_uv * (-F_v)) * inv_det
+                    dv = (-H_uv * (-F_u) + H_uu * (-F_v)) * inv_det
+
+                step_len = float(np.sqrt(du * du + dv * dv))
+                if step_len > 0.35:
+                    scale = 0.35 / step_len
+                    du *= scale
+                    dv *= scale
+
+                u_new = u + du
+                v_new = v + dv
+
+                change = abs(u_new - u) + abs(v_new - v)
+                u = u_new
+                v = v_new
+                if change < 1e-6:
+                    break
+
+            p_proj, dist, u_c, v_c = self._project_to_domain_geometry(point, tri_idx, u, v)
+            dist_sq = dist * dist
+            if dist_sq < best_dist_sq:
+                best_dist_sq = dist_sq
+                best_u = u_c
+                best_v = v_c
+                best_p = p_proj
+
+        if best_p is None:
+            best_p, dist, best_u, best_v = self._project_to_domain_geometry(point, tri_idx, 0.666, 0.333)
+            best_dist_sq = dist * dist
+
+        return best_p, float(np.sqrt(best_dist_sq)), float(best_u), float(best_v)
+
+    def query_feature_aware(self, point: np.ndarray, k_nearest: int = 16) -> Optional[Dict[str, Any]]:
+        candidate_triangles = set()
+        candidate_edges = set()
+        candidate_vertices = set()
+
+        if self._feature_bvh is not None and self._features:
+            k_features = max(64, int(k_nearest) * 16)
+            hit_indices = self._feature_bvh.query_k(point, k_features)
+            for fi in hit_indices:
+                f = self._features[int(fi)]
+                if f.feature_type == "FACE":
+                    candidate_triangles.add(int(f.ref))
+                elif f.feature_type in ("EDGE", "SHARPEDGE"):
+                    candidate_edges.add(tuple(sorted((int(f.ref[0]), int(f.ref[1])))))
+                    tri_indices = self.edge_to_tris.get(tuple(sorted((int(f.ref[0]), int(f.ref[1])))))
+                    if tri_indices:
+                        for t_idx in tri_indices:
+                            candidate_triangles.add(int(t_idx))
+                elif f.feature_type == "VERTEX":
+                    v_idx = int(f.ref)
+                    candidate_vertices.add(v_idx)
+                    for t_idx, _ in self.vertex_to_tris.get(v_idx, []):
+                        candidate_triangles.add(int(t_idx))
+
+        if not candidate_triangles:
+            for t_idx in self._get_candidate_triangle_indices(point, k_nearest):
+                candidate_triangles.add(int(t_idx))
+
+        candidate_triangles = sorted(candidate_triangles)
+
+        candidates = []
+        min_dist = float("inf")
+
+        eps_interior = 1e-6
+        for t_idx in candidate_triangles:
+            p_surf, dist, u, v = self._face_project_multi_start(point, t_idx)
+            if self._is_interior_uv(u, v, eps_interior):
+                surf_n = self._eval_patch_normal(t_idx, u, v)
+                diff_vec = point - p_surf
+                diff_len = float(np.linalg.norm(diff_vec))
+                if diff_len > 1e-12:
+                    grad = diff_vec / diff_len
+                    if float(np.dot(grad, surf_n)) < 0.0:
+                        grad = -grad
+                else:
+                    grad = surf_n
+
+                if dist < min_dist:
+                    min_dist = dist
+                candidates.append(
+                    {
+                        "nearest_point": p_surf,
+                        "distance": float(dist),
+                        "normal": grad,
+                        "triangle_index": int(t_idx),
+                        "uv": (float(u), float(v)),
+                        "feature_type": "FACE",
+                    }
+                )
+
+        if not candidate_edges:
+            for t_idx in candidate_triangles:
+                tri = self.triangles[int(t_idx)]
+                v0 = int(tri[0])
+                v1 = int(tri[1])
+                v2 = int(tri[2])
+                candidate_edges.add(tuple(sorted((v0, v1))))
+                candidate_edges.add(tuple(sorted((v1, v2))))
+                candidate_edges.add(tuple(sorted((v0, v2))))
+
+        for edge_key in candidate_edges:
+            tri_indices = self.edge_to_tris.get(edge_key)
+            if not tri_indices:
+                continue
+
+            tri_idx0 = int(tri_indices[0])
+            local_edge_idx = self._local_edge_index_for_edge_key(tri_idx0, edge_key)
+            if local_edge_idx is None:
+                continue
+
+            vA, vB = edge_key
+            posA = self.vertices[int(vA)]
+            posB = self.vertices[int(vB)]
+            edge_vec = posB - posA
+            edge_len2 = float(np.dot(edge_vec, edge_vec))
+            t0 = float(np.dot(point - posA, edge_vec) / edge_len2) if edge_len2 > 1e-14 else 0.0
+            p_edge, dist, t_best = self._optimize_edge(point, tri_idx0, int(local_edge_idx), t0)
+            u_e, v_e = self._uv_on_edge(int(local_edge_idx), t_best)
+
+            if t_best <= 1e-6 or t_best >= 1.0 - 1e-6:
+                continue
+
+            n_sum = np.zeros(3)
+            for tri_idx in tri_indices:
+                tri_idx = int(tri_idx)
+                local_idx = self._local_edge_index_for_edge_key(tri_idx, edge_key)
+                if local_idx is None:
+                    continue
+                u_n, v_n = self._uv_on_edge(int(local_idx), t_best)
+                n_sum += self._eval_patch_normal(tri_idx, u_n, v_n)
+
+            n_len = float(np.linalg.norm(n_sum))
+            if n_len > 1e-12:
+                pseudo_n = n_sum / n_len
+            else:
+                pseudo_n = np.array([0.0, 0.0, 1.0], dtype=float)
+
+            diff_vec = point - p_edge
+            diff_len = float(np.linalg.norm(diff_vec))
+            if diff_len > 1e-12:
+                grad = diff_vec / diff_len
+                if float(np.dot(grad, pseudo_n)) < 0.0:
+                    grad = -grad
+            else:
+                grad = pseudo_n
+
+            if dist < min_dist:
+                min_dist = dist
+            candidates.append(
+                {
+                    "nearest_point": p_edge,
+                    "distance": float(dist),
+                    "normal": grad,
+                    "triangle_index": int(tri_idx0),
+                    "uv": (float(u_e), float(v_e)),
+                    "feature_type": "SHARPEDGE" if edge_key in self.crease_map else "EDGE",
+                }
+            )
+
+        if not candidate_vertices:
+            for t_idx in candidate_triangles:
+                tri = self.triangles[int(t_idx)]
+                candidate_vertices.add(int(tri[0]))
+                candidate_vertices.add(int(tri[1]))
+                candidate_vertices.add(int(tri[2]))
+
+        for v_idx in candidate_vertices:
+            v_idx = int(v_idx)
+            p_v = self.vertices[v_idx]
+            dist = float(np.linalg.norm(point - p_v))
+
+            n_sum = np.zeros(3)
+            for tri_idx, local_idx in self.vertex_to_tris.get(v_idx, []):
+                n_sum += self.normals[int(tri_idx), int(local_idx)]
+
+            n_len = float(np.linalg.norm(n_sum))
+            if n_len > 1e-12:
+                pseudo_n = n_sum / n_len
+            else:
+                pseudo_n = np.array([0.0, 0.0, 1.0], dtype=float)
+
+            diff_vec = point - p_v
+            diff_len = float(np.linalg.norm(diff_vec))
+            if diff_len > 1e-12:
+                grad = diff_vec / diff_len
+                if float(np.dot(grad, pseudo_n)) < 0.0:
+                    grad = -grad
+            else:
+                grad = pseudo_n
+
+            if dist < min_dist:
+                min_dist = dist
+            candidates.append(
+                {
+                    "nearest_point": p_v,
+                    "distance": float(dist),
+                    "normal": grad,
+                    "triangle_index": int(candidate_triangles[0]) if candidate_triangles else 0,
+                    "uv": (0.0, 0.0),
+                    "feature_type": "VERTEX",
+                    "vertex_index": v_idx,
+                }
+            )
+
+        if not candidates:
+            return None
+
+        epsilon = 1e-5 * (min_dist + 1.0)
+        best_candidates = [c for c in candidates if c["distance"] <= min_dist + epsilon]
+        if not best_candidates:
+            return None
+
+        avg_gradient = np.zeros(3)
+        mean_dist = 0.0
+        for c in best_candidates:
+            avg_gradient += c["normal"]
+            mean_dist += c["distance"]
+
+        norm_len = float(np.linalg.norm(avg_gradient))
+        if norm_len > 1e-12:
+            avg_gradient /= norm_len
+        else:
+            avg_gradient = best_candidates[0]["normal"]
+
+        mean_dist /= float(len(best_candidates))
+
+        primary_res = dict(best_candidates[0])
+        primary_res["normal"] = avg_gradient
+        primary_res["distance"] = float(mean_dist)
+        return primary_res
 
     def query(self, point: np.ndarray, k_nearest: int = 16) -> dict:
         """
@@ -1134,4 +1931,3 @@ if __name__ == '__main__':
     print(f"距离: {res['distance']:.6f}")
     print(f"法向: {res['normal']}")
     print(f"Face ID: {res['triangle_index']}")
-

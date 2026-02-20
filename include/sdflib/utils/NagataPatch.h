@@ -67,8 +67,7 @@ namespace NagataPatch
     {
         bool enabled = false;       // Is this edge a crease/crack requiring repair?
         glm::vec3 c_sharp;          // The shared coefficient for this edge
-        float d0 = 0.1f;            // Influence width
-        float inv_d0 = 10.0f;       // 1/d0 for speed
+        float k_factor = 0.0f;
     };
 
     /**
@@ -105,16 +104,6 @@ namespace NagataPatch
     // =========================================================================
 
 
-
-    /**
-     * @brief Quintic smooth step
-     */
-    float smoothStepQuintic(float s);
-    
-    /**
-     * @brief Quintic smooth step derivative
-     */
-    float smoothStepQuinticDeriv(float s);
 
     /**
      * @brief Calculates effective coefficients and their derivatives at (u,v)

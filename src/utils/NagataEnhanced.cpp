@@ -285,24 +285,248 @@ namespace NagataEnhanced
         
         return c_sharp;
     }
-    
+
+    static int edgeIndexForTriangle(const std::array<uint32_t, 3>& tri, const EdgeKey& edgeKey)
+    {
+        if (EdgeKey(tri[0], tri[1]) == edgeKey) return 0;
+        if (EdgeKey(tri[1], tri[2]) == edgeKey) return 1;
+        if (EdgeKey(tri[0], tri[2]) == edgeKey) return 2;
+        return -1;
+    }
+
+    static std::vector<std::pair<float, float>> sampleUvForEdge(int edgeIdx, int steps = 5, float eps = 0.05f)
+    {
+        std::vector<std::pair<float, float>> uvs;
+        if (steps <= 0)
+        {
+            return uvs;
+        }
+
+        uvs.reserve(static_cast<size_t>(steps));
+        float denom = (steps > 1) ? static_cast<float>(steps - 1) : 1.0f;
+        for (int i = 0; i < steps; ++i)
+        {
+            float t = eps + (1.0f - 2.0f * eps) * (static_cast<float>(i) / denom);
+            if (edgeIdx == 0)
+            {
+                uvs.emplace_back(t, eps);
+            }
+            else if (edgeIdx == 1)
+            {
+                uvs.emplace_back(1.0f - eps, t * (1.0f - eps));
+            }
+            else
+            {
+                uvs.emplace_back(t, t - eps);
+            }
+        }
+        return uvs;
+    }
+
+    static glm::vec3 evaluateSurfaceRaw(
+        const NagataPatch::NagataPatchData& patch,
+        const NagataPatch::PatchEnhancementData& enhance,
+        float u, float v)
+    {
+        NagataPatch::BlendingResult blend;
+        NagataPatch::computeEffectiveCoefficients(patch, enhance, u, v, blend);
+
+        const glm::vec3& x00 = patch.vertices[0];
+        const glm::vec3& x10 = patch.vertices[1];
+        const glm::vec3& x11 = patch.vertices[2];
+
+        float oneMinusU = 1.0f - u;
+        float uMinusV = u - v;
+
+        glm::vec3 P_lin = x00 * oneMinusU + x10 * uMinusV + x11 * v;
+        glm::vec3 Q1 = blend.c_eff[0] * (oneMinusU * uMinusV);
+        glm::vec3 Q2 = blend.c_eff[1] * (uMinusV * v);
+        glm::vec3 Q3 = blend.c_eff[2] * (oneMinusU * v);
+
+        return P_lin - Q1 - Q2 - Q3;
+    }
+
+    static bool checkEdgeConstraintsForTriangle(
+        const glm::vec3& x00,
+        const glm::vec3& x10,
+        const glm::vec3& x11,
+        const glm::vec3& c1_orig,
+        const glm::vec3& c2_orig,
+        const glm::vec3& c3_orig,
+        int edgeIdx,
+        const glm::vec3& c_sharp_edge,
+        float k_factor,
+        float eps = 1e-10f)
+    {
+        glm::vec3 n_ref = glm::cross(x10 - x00, x11 - x00);
+        float n_len = glm::length(n_ref);
+        if (n_len < 1e-12f)
+        {
+            return true;
+        }
+        n_ref /= n_len;
+
+        NagataPatch::NagataPatchData patch;
+        patch.vertices[0] = x00;
+        patch.vertices[1] = x10;
+        patch.vertices[2] = x11;
+        patch.normals[0] = glm::vec3(0.0f);
+        patch.normals[1] = glm::vec3(0.0f);
+        patch.normals[2] = glm::vec3(0.0f);
+        patch.c_orig[0] = c1_orig;
+        patch.c_orig[1] = c2_orig;
+        patch.c_orig[2] = c3_orig;
+
+        NagataPatch::PatchEnhancementData enhance;
+        enhance.edges[0].enabled = false;
+        enhance.edges[1].enabled = false;
+        enhance.edges[2].enabled = false;
+        enhance.edges[edgeIdx].enabled = true;
+        enhance.edges[edgeIdx].c_sharp = c_sharp_edge;
+        enhance.edges[edgeIdx].k_factor = k_factor;
+
+        glm::vec3 a, b, opp;
+        if (edgeIdx == 0)
+        {
+            a = x00; b = x10; opp = x11;
+        }
+        else if (edgeIdx == 1)
+        {
+            a = x10; b = x11; opp = x00;
+        }
+        else
+        {
+            a = x00; b = x11; opp = x10;
+        }
+
+        glm::vec3 e = b - a;
+        glm::vec3 sideDir = glm::cross(n_ref, e);
+        float sideLen = glm::length(sideDir);
+        if (sideLen < 1e-12f)
+        {
+            return true;
+        }
+        sideDir /= sideLen;
+        if (glm::dot(sideDir, opp - (a + b) * 0.5f) < 0.0f)
+        {
+            sideDir = -sideDir;
+        }
+
+        const auto samples = sampleUvForEdge(edgeIdx);
+        for (const auto& uv : samples)
+        {
+            float u = uv.first;
+            float v = uv.second;
+
+            glm::vec3 p = evaluateSurfaceRaw(patch, enhance, u, v);
+            glm::vec3 dXdu, dXdv;
+            NagataPatch::evaluateDerivatives(patch, enhance, u, v, dXdu, dXdv);
+            float jac = glm::dot(glm::cross(dXdu, dXdv), n_ref);
+            if (jac <= 0.0f)
+            {
+                return false;
+            }
+
+            float t = (edgeIdx == 0) ? u : v;
+            glm::vec3 edgePoint = (1.0f - t) * a + t * b - c_sharp_edge * t * (1.0f - t);
+            float s = glm::dot(p - edgePoint, sideDir);
+            if (s < -eps)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     EnhancedNagataData computeCSharpForEdges(
-        const std::map<EdgeKey, CreaseEdgeInfo>& creaseEdges)
+        const std::map<EdgeKey, CreaseEdgeInfo>& creaseEdges,
+        const std::vector<glm::vec3>& vertices,
+        const std::vector<std::array<uint32_t, 3>>& faces,
+        const std::vector<std::array<glm::vec3, 3>>& faceNormals,
+        float k_factor)
     {
         EnhancedNagataData data;
-        
+
         for (const auto& [edgeKey, info] : creaseEdges)
         {
             glm::vec3 e = info.B - info.A;
-            
+
             glm::vec3 dA = computeCreaseDirection(info.n_A_L, info.n_A_R, e);
             glm::vec3 dB = computeCreaseDirection(info.n_B_L, info.n_B_R, e);
-            
+            if (glm::dot(dA, dB) < 0.0f)
+            {
+                dB = -dB;
+            }
+
             glm::vec3 c_sharp = computeCSharp(info.A, info.B, dA, dB);
-            
-            data.c_sharps[edgeKey] = c_sharp;
+
+            int triL = info.tri_L;
+            int triR = info.tri_R;
+            if (triL < 0 || triR < 0 ||
+                triL >= static_cast<int>(faces.size()) ||
+                triR >= static_cast<int>(faces.size()))
+            {
+                data.c_sharps[edgeKey] = c_sharp;
+                continue;
+            }
+
+            const auto& triLIdx = faces[triL];
+            const auto& triRIdx = faces[triR];
+            int edgeIdxL = edgeIndexForTriangle(triLIdx, edgeKey);
+            int edgeIdxR = edgeIndexForTriangle(triRIdx, edgeKey);
+            if (edgeIdxL < 0 || edgeIdxR < 0)
+            {
+                data.c_sharps[edgeKey] = c_sharp;
+                continue;
+            }
+
+            NagataPatch::NagataPatchData patchL(
+                vertices[triLIdx[0]], vertices[triLIdx[1]], vertices[triLIdx[2]],
+                faceNormals[triL][0], faceNormals[triL][1], faceNormals[triL][2]);
+            NagataPatch::NagataPatchData patchR(
+                vertices[triRIdx[0]], vertices[triRIdx[1]], vertices[triRIdx[2]],
+                faceNormals[triR][0], faceNormals[triR][1], faceNormals[triR][2]);
+
+            glm::vec3 c_orig_L = patchL.c_orig[edgeIdxL];
+            glm::vec3 c_orig_R = patchR.c_orig[edgeIdxR];
+            glm::vec3 baseline = 0.5f * (c_orig_L + c_orig_R);
+
+            float low = 0.0f;
+            float high = 1.0f;
+            glm::vec3 best = baseline;
+            for (int i = 0; i < 12; ++i)
+            {
+                float mid = 0.5f * (low + high);
+                glm::vec3 candidate = baseline + mid * (c_sharp - baseline);
+
+                bool okL = checkEdgeConstraintsForTriangle(
+                    patchL.vertices[0], patchL.vertices[1], patchL.vertices[2],
+                    patchL.c_orig[0], patchL.c_orig[1], patchL.c_orig[2],
+                    edgeIdxL,
+                    candidate,
+                    k_factor);
+                bool okR = checkEdgeConstraintsForTriangle(
+                    patchR.vertices[0], patchR.vertices[1], patchR.vertices[2],
+                    patchR.c_orig[0], patchR.c_orig[1], patchR.c_orig[2],
+                    edgeIdxR,
+                    candidate,
+                    k_factor);
+
+                if (okL && okR)
+                {
+                    best = candidate;
+                    low = mid;
+                }
+                else
+                {
+                    high = mid;
+                }
+            }
+
+            data.c_sharps[edgeKey] = best;
         }
-        
+
         return data;
     }
     
@@ -337,7 +561,7 @@ namespace NagataEnhanced
         }
         
         std::cout << "NagataEnhanced: Computing shared boundary coefficients..." << std::endl;
-        data = computeCSharpForEdges(creaseEdges);
+        data = computeCSharpForEdges(creaseEdges, vertices, faces, faceNormals);
         
         if (saveCache)
         {
@@ -345,271 +569,6 @@ namespace NagataEnhanced
         }
         
         return data;
-    }
-    
-    // ============================================================
-    // Enhanced surface evaluation
-    // ============================================================
-    
-    float smoothstep(float t)
-    {
-        t = std::clamp(t, 0.0f, 1.0f);
-        return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
-    }
-    
-    glm::vec3 evaluateSurfaceEnhanced(
-        const NagataPatch::NagataPatchData& patch,
-        float u, float v,
-        glm::vec3 c_sharp_1, glm::vec3 c_sharp_2, glm::vec3 c_sharp_3,
-        std::array<bool, 3> isCrease,
-        float d0)
-    {
-        const glm::vec3& x00 = patch.vertices[0];
-        const glm::vec3& x10 = patch.vertices[1];
-        const glm::vec3& x11 = patch.vertices[2];
-        
-        glm::vec3 c1_orig = patch.c_orig[0]; // Correction: accessing c_orig directly, not curvatureCoeffs
-        glm::vec3 c2_orig = patch.c_orig[1];
-        glm::vec3 c3_orig = patch.c_orig[2];
-        
-        // Distance parameters
-        float d1 = v;           // Edge 1
-        float d2 = 1.0f - u;    // Edge 2
-        float d3 = u - v;       // Edge 3
-        
-        auto blendCoeff = [&](glm::vec3 c_orig, glm::vec3 c_sharp, float d, bool isCreaseEdge) -> glm::vec3
-        {
-            if (!isCreaseEdge)
-                return c_orig;
-            
-            float s = std::clamp(d / d0, 0.0f, 1.0f);
-            float w = smoothstep(s);  
-            return (1.0f - w) * c_sharp + w * c_orig;
-        };
-        
-        glm::vec3 c1_eff = blendCoeff(c1_orig, c_sharp_1, d1, isCrease[0]);
-        glm::vec3 c2_eff = blendCoeff(c2_orig, c_sharp_2, d2, isCrease[1]);
-        glm::vec3 c3_eff = blendCoeff(c3_orig, c_sharp_3, d3, isCrease[2]);
-        
-        float oneMinusU = 1.0f - u;
-        float uMinusV = u - v;
-        
-        return x00 * oneMinusU + x10 * uMinusV + x11 * v
-             - c1_eff * oneMinusU * uMinusV
-             - c2_eff * uMinusV * v
-             - c3_eff * oneMinusU * v;
-    }
-
-    float smoothstepDeriv(float t)
-    {
-        if (t <= 0.0f || t >= 1.0f) return 0.0f;
-        float v = t * (1.0f - t);
-        return 30.0f * v * v;
-    }
-
-    void evaluateDerivativesEnhanced(
-        const NagataPatch::NagataPatchData& patch,
-        float u, float v,
-        glm::vec3 c_sharp_1, glm::vec3 c_sharp_2, glm::vec3 c_sharp_3,
-        std::array<bool, 3> isCrease,
-        float d0,
-        glm::vec3& dXdu, glm::vec3& dXdv)
-    {
-        const glm::vec3& x00 = patch.vertices[0];
-        const glm::vec3& x10 = patch.vertices[1];
-        const glm::vec3& x11 = patch.vertices[2];
-
-        float d1 = v;           // Edge 1
-        float d2 = 1.0f - u;    // Edge 2
-        float d3 = u - v;       // Edge 3
-
-        auto getCoeff = [&](const glm::vec3& c_orig, const glm::vec3& c_sharp, float d, bool isCrease) 
-        {
-            if (!isCrease) return c_orig;
-            float s = std::clamp(d / d0, 0.0f, 1.0f);
-            float w = smoothstep(s);
-            return (1.0f - w) * c_sharp + w * c_orig;
-        };
-
-        glm::vec3 c1 = getCoeff(patch.c_orig[0], c_sharp_1, d1, isCrease[0]);
-        glm::vec3 c2 = getCoeff(patch.c_orig[1], c_sharp_2, d2, isCrease[1]);
-        glm::vec3 c3 = getCoeff(patch.c_orig[2], c_sharp_3, d3, isCrease[2]);
-
-        glm::vec3 dXdu_base = -x00 + x10 
-                            - c1 * (1.0f - 2.0f * u + v) 
-                            - c2 * v 
-                            + c3 * v;
-
-        glm::vec3 dXdv_base = -x10 + x11 
-                            + c1 * (1.0f - u) 
-                            - c2 * (u - 2.0f * v) 
-                            - c3 * (1.0f - u);
-        
-        auto getDwDd = [&](float d, bool isCrease) -> float
-        {
-            if (!isCrease) return 0.0f;
-            if (d < 0.0f || d > d0) return 0.0f;
-            return smoothstepDeriv(d / d0) / d0;
-        };
-
-        float dw1_dv = getDwDd(d1, isCrease[0]);
-        glm::vec3 dc1_dv = (patch.c_orig[0] - c_sharp_1) * dw1_dv;
-
-        float dw2_du = getDwDd(d2, isCrease[1]) * (-1.0f);
-        glm::vec3 dc2_du = (patch.c_orig[1] - c_sharp_2) * dw2_du;
-
-        float dw3_raw = getDwDd(d3, isCrease[2]);
-        glm::vec3 dc3_du = (patch.c_orig[2] - c_sharp_3) * dw3_raw;
-        glm::vec3 dc3_dv = (patch.c_orig[2] - c_sharp_3) * (-dw3_raw);
-
-        float B1 = (1.0f - u) * (u - v);
-        float B2 = (u - v) * v;
-        float B3 = (1.0f - u) * v;
-
-        dXdu = dXdu_base - (dc2_du * B2 + dc3_du * B3);
-        dXdv = dXdv_base - (dc1_dv * B1 + dc3_dv * B3);
-    }
-
-    glm::vec3 evaluateNormalEnhanced(
-        const NagataPatch::NagataPatchData& patch,
-        float u, float v,
-        glm::vec3 c_sharp_1, glm::vec3 c_sharp_2, glm::vec3 c_sharp_3,
-        std::array<bool, 3> isCrease,
-        float d0)
-    {
-        glm::vec3 dXdu, dXdv;
-        evaluateDerivativesEnhanced(patch, u, v, c_sharp_1, c_sharp_2, c_sharp_3, isCrease, d0, dXdu, dXdv);
-        
-        glm::vec3 normal = glm::cross(dXdu, dXdv);
-        float len = glm::length(normal);
-        
-        if (len > 1e-10f) return normal / len;
-        
-        float w0 = 1.0f - u;
-        float w1 = u - v;
-        float w2 = v;
-        return glm::normalize(w0 * patch.normals[0] + w1 * patch.normals[1] + w2 * patch.normals[2]);
-    }
-
-    float findNearestPointOnEnhancedNagataPatch(
-        glm::vec3 point,
-        const NagataPatch::NagataPatchData& patch,
-        const EnhancedNagataData& enhancedData,
-        const std::array<uint32_t, 3>& vertexIndices,
-        glm::vec3& nearestPoint, 
-        float& minU, float& minV)
-    {
-        EdgeKey key1(vertexIndices[0], vertexIndices[1]);
-        EdgeKey key2(vertexIndices[1], vertexIndices[2]);
-        EdgeKey key3(vertexIndices[0], vertexIndices[2]);
-        
-        std::array<bool, 3> isCrease = {
-            enhancedData.hasEdge(key1),
-            enhancedData.hasEdge(key2),
-            enhancedData.hasEdge(key3)
-        };
-
-        if (!isCrease[0] && !isCrease[1] && !isCrease[2])
-        {
-             NagataPatch::PatchEnhancementData emptyEnhance; 
-             auto res = NagataPatch::findNearestPoint(point, patch, emptyEnhance);
-             nearestPoint = res.nearestPoint;
-             minU = res.parameter.x;
-             minV = res.parameter.y;
-             return res.sqDistance;
-        }
-
-        glm::vec3 c1 = enhancedData.getCSharpOriented(vertexIndices[0], vertexIndices[1]);
-        glm::vec3 c2 = enhancedData.getCSharpOriented(vertexIndices[1], vertexIndices[2]);
-        glm::vec3 c3 = enhancedData.getCSharpOriented(vertexIndices[0], vertexIndices[2]);
-        float d0 = 0.1f; 
-
-        // Initial guess: multi-point sampling
-        minU = 0.333f; minV = 0.166f;
-        float minDistSq = std::numeric_limits<float>::max();
-        
-        const std::array<std::pair<float, float>, 7> initialSamples = {{
-            {0.5f, 0.25f}, {0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f},
-            {0.5f, 0.0f}, {1.0f, 0.5f}, {0.5f, 0.5f}
-        }};
-        
-        for (const auto& sample : initialSamples)
-        {
-            float u = sample.first;
-            float v = sample.second;
-            
-            for (int iter = 0; iter < 10; ++iter)
-            {
-                glm::vec3 surfacePoint = evaluateSurfaceEnhanced(patch, u, v, c1, c2, c3, isCrease, d0);
-                glm::vec3 diffVec = surfacePoint - point;
-
-                glm::vec3 dXdu, dXdv;
-                evaluateDerivativesEnhanced(patch, u, v, c1, c2, c3, isCrease, d0, dXdu, dXdv);
-                
-                float gradU = glm::dot(diffVec, dXdu);
-                float gradV = glm::dot(diffVec, dXdv);
-                
-                float H11 = glm::dot(dXdu, dXdu);
-                float H12 = glm::dot(dXdu, dXdv);
-                float H22 = glm::dot(dXdv, dXdv);
-                
-                float det = H11 * H22 - H12 * H12;
-                if (std::abs(det) < 1e-10f) break;
-                
-                float deltaU = (H22 * (-gradU) - H12 * (-gradV)) / det;
-                float deltaV = (-H12 * (-gradU) + H11 * (-gradV)) / det;
-                
-                u += deltaU;
-                v += deltaV;
-                
-                if (v < 0.0f) v = 0.0f;
-                if (u < 0.0f) u = 0.0f;
-                if (u > 1.0f) u = 1.0f;
-                if (v > u) v = u;
-
-                if (std::abs(deltaU) < 1e-5f && std::abs(deltaV) < 1e-5f) break;
-            }
-            
-            glm::vec3 p = evaluateSurfaceEnhanced(patch, u, v, c1, c2, c3, isCrease, d0);
-            float d2 = glm::dot(point - p, point - p);
-            if (d2 < minDistSq)
-            {
-                minDistSq = d2;
-                minU = u; minV = v;
-                nearestPoint = p;
-            }
-        }
-        
-        return minDistSq;
-    }
-
-    float getSignedDistPointAndEnhancedNagataPatch(
-        glm::vec3 point,
-        const NagataPatch::NagataPatchData& patch,
-        const EnhancedNagataData& enhancedData,
-        const std::array<uint32_t, 3>& vertexIndices,
-        glm::vec3* outNearestPoint)
-    {
-        glm::vec3 nearestPoint;
-        float u, v;
-        
-        float distSq = findNearestPointOnEnhancedNagataPatch(point, patch, enhancedData, vertexIndices, nearestPoint, u, v);
-        
-        EdgeKey key1(vertexIndices[0], vertexIndices[1]);
-        EdgeKey key2(vertexIndices[1], vertexIndices[2]);
-        EdgeKey key3(vertexIndices[0], vertexIndices[2]);
-        std::array<bool, 3> isCrease = { enhancedData.hasEdge(key1), enhancedData.hasEdge(key2), enhancedData.hasEdge(key3) };
-        glm::vec3 c1 = enhancedData.getCSharpOriented(vertexIndices[0], vertexIndices[1]);
-        glm::vec3 c2 = enhancedData.getCSharpOriented(vertexIndices[1], vertexIndices[2]);
-        glm::vec3 c3 = enhancedData.getCSharpOriented(vertexIndices[0], vertexIndices[2]);
-
-        glm::vec3 normal = evaluateNormalEnhanced(patch, u, v, c1, c2, c3, isCrease);
-        
-        float sign = glm::dot(point - nearestPoint, normal) >= 0.0f ? 1.0f : -1.0f;
-        
-        if (outNearestPoint) *outNearestPoint = nearestPoint;
-        
-        return sign * std::sqrt(distSq);
     }
 }
 }

@@ -33,19 +33,132 @@ namespace NagataPatch
         }
     }
 
-    // =========================================================================
-    // Quintic Blending Math
-    // =========================================================================
-
-    float smoothStepQuintic(float s)
+    static float gaussianDecay(float d, float k)
     {
-        return s * s * s * (s * (s * 6.0f - 15.0f) + 10.0f);
+        return std::exp(-k * d * d);
     }
-    
-    float smoothStepQuinticDeriv(float s)
+
+    static float gaussianDecayDeriv(float d, float k)
     {
-        float t = s - 1.0f;
-        return 30.0f * s * s * t * t;
+        return -2.0f * k * d * std::exp(-k * d * d);
+    }
+
+    static bool anyEdgeEnabled(const PatchEnhancementData& enhance)
+    {
+        return enhance.edges[0].enabled || enhance.edges[1].enabled || enhance.edges[2].enabled;
+    }
+
+    static bool computeReferenceNormal(
+        const NagataPatchData& patch,
+        glm::vec3& n_ref)
+    {
+        glm::vec3 triNormal = glm::cross(patch.vertices[1] - patch.vertices[0], patch.vertices[2] - patch.vertices[0]);
+        float len = glm::length(triNormal);
+        if (len > 1e-12f)
+        {
+            n_ref = triNormal / len;
+            return true;
+        }
+
+        glm::vec3 avg = patch.normals[0] + patch.normals[1] + patch.normals[2];
+        len = glm::length(avg);
+        if (len > 1e-12f)
+        {
+            n_ref = avg / len;
+            return true;
+        }
+
+        return false;
+    }
+
+    static glm::vec3 evaluateSurfaceOriginal(
+        const NagataPatchData& patch,
+        float u, float v)
+    {
+        const glm::vec3& x00 = patch.vertices[0];
+        const glm::vec3& x10 = patch.vertices[1];
+        const glm::vec3& x11 = patch.vertices[2];
+
+        float oneMinusU = 1.0f - u;
+        float uMinusV = u - v;
+
+        glm::vec3 P_lin = x00 * oneMinusU + x10 * uMinusV + x11 * v;
+        glm::vec3 Q1 = patch.c_orig[0] * (oneMinusU * uMinusV);
+        glm::vec3 Q2 = patch.c_orig[1] * (uMinusV * v);
+        glm::vec3 Q3 = patch.c_orig[2] * (oneMinusU * v);
+
+        return P_lin - Q1 - Q2 - Q3;
+    }
+
+    static glm::vec3 applyEdgeCrossingGuard(
+        const NagataPatchData& patch,
+        const PatchEnhancementData& enhance,
+        float u, float v,
+        const glm::vec3& n_ref,
+        glm::vec3 point)
+    {
+        const glm::vec3& x00 = patch.vertices[0];
+        const glm::vec3& x10 = patch.vertices[1];
+        const glm::vec3& x11 = patch.vertices[2];
+
+        const std::array<int, 3> enabled = {
+            enhance.edges[0].enabled ? 1 : 0,
+            enhance.edges[1].enabled ? 1 : 0,
+            enhance.edges[2].enabled ? 1 : 0
+        };
+
+        if (!enabled[0] && !enabled[1] && !enabled[2])
+        {
+            return point;
+        }
+
+        struct EdgeInfo
+        {
+            glm::vec3 a;
+            glm::vec3 b;
+            glm::vec3 opp;
+            glm::vec3 c_sharp;
+            float t;
+            bool enabled;
+        };
+
+        const std::array<EdgeInfo, 3> edges = {{
+            {x00, x10, x11, enhance.edges[0].c_sharp, u, enhance.edges[0].enabled},
+            {x10, x11, x00, enhance.edges[1].c_sharp, v, enhance.edges[1].enabled},
+            {x00, x11, x10, enhance.edges[2].c_sharp, v, enhance.edges[2].enabled}
+        }};
+
+        for (const auto& edge : edges)
+        {
+            if (!edge.enabled)
+            {
+                continue;
+            }
+
+            glm::vec3 e = edge.b - edge.a;
+            glm::vec3 sideDir = glm::cross(n_ref, e);
+            float sideLen = glm::length(sideDir);
+            if (sideLen < 1e-12f)
+            {
+                continue;
+            }
+            sideDir /= sideLen;
+
+            if (glm::dot(sideDir, edge.opp - (edge.a + edge.b) * 0.5f) < 0.0f)
+            {
+                sideDir = -sideDir;
+            }
+
+            float t = edge.t;
+            glm::vec3 edgePoint = (1.0f - t) * edge.a + t * edge.b - edge.c_sharp * t * (1.0f - t);
+            float s = glm::dot(point - edgePoint, sideDir);
+            if (s < 0.0f)
+            {
+                point -= s * sideDir;
+            }
+        }
+
+        return point;
     }
 
     void computeEffectiveCoefficients(
@@ -54,10 +167,7 @@ namespace NagataPatch
         float u, float v,
         BlendingResult& res)
     {
-        // Distance parametrizations
-        float d[3] = { v, 1.0f - u, u - v }; // Distances to edges 0, 1, 2
-        
-        // Derivatives of d w.r.t u and v
+        float d[3] = { v, 1.0f - u, u - v };
         const float dd_du[3] = { 0.0f, -1.0f, 1.0f };
         const float dd_dv[3] = { 1.0f, 0.0f, -1.0f };
 
@@ -65,43 +175,23 @@ namespace NagataPatch
         {
             if(!enhance.edges[i].enabled)
             {
-                // No blending, constant value
                 res.c_eff[i] = patch.c_orig[i];
                 res.dc_du[i] = glm::vec3(0.0f);
                 res.dc_dv[i] = glm::vec3(0.0f);
+                continue;
             }
-            else
-            {
-                float d0 = enhance.edges[i].d0;
-                float inv_d0 = enhance.edges[i].inv_d0;
-                float dist = d[i];
-                
-                if(dist <= 0.0f) // On the edge (or outside in specific way)
-                {
-                     res.c_eff[i] = enhance.edges[i].c_sharp;
-                     res.dc_du[i] = glm::vec3(0.0f);
-                     res.dc_dv[i] = glm::vec3(0.0f);
-                }
-                else if(dist >= d0) // Far from edge
-                {
-                     res.c_eff[i] = patch.c_orig[i];
-                     res.dc_du[i] = glm::vec3(0.0f);
-                     res.dc_dv[i] = glm::vec3(0.0f);
-                }
-                else // Blending region
-                {
-                    float s = dist * inv_d0;
-                    float w = smoothStepQuintic(s);
-                    float dw_ds = smoothStepQuinticDeriv(s);
-                    
-                    glm::vec3 diff = patch.c_orig[i] - enhance.edges[i].c_sharp;
-                    res.c_eff[i] = enhance.edges[i].c_sharp + w * diff;
-                    
-                    glm::vec3 factor = diff * dw_ds * inv_d0;
-                    res.dc_du[i] = factor * dd_du[i];
-                    res.dc_dv[i] = factor * dd_dv[i];
-                }
-            }
+
+            float k = enhance.edges[i].k_factor;
+            float dist = d[i];
+            float w = gaussianDecay(dist, k);
+            glm::vec3 delta = enhance.edges[i].c_sharp - patch.c_orig[i];
+
+            res.c_eff[i] = patch.c_orig[i] + delta * w;
+
+            float dw_dd = gaussianDecayDeriv(dist, k);
+            glm::vec3 dcd = delta * dw_dd;
+            res.dc_du[i] = dcd * dd_du[i];
+            res.dc_dv[i] = dcd * dd_dv[i];
         }
     }
 
@@ -132,7 +222,28 @@ namespace NagataPatch
         glm::vec3 Q2 = blend.c_eff[1] * (uMinusV * v);
         glm::vec3 Q3 = blend.c_eff[2] * (oneMinusU * v);
         
-        return P_lin - Q1 - Q2 - Q3;
+        glm::vec3 point = P_lin - Q1 - Q2 - Q3;
+
+        if (!anyEdgeEnabled(enhance))
+        {
+            return point;
+        }
+
+        glm::vec3 n_ref;
+        if (!computeReferenceNormal(patch, n_ref))
+        {
+            return point;
+        }
+
+        glm::vec3 dXdu, dXdv;
+        evaluateDerivatives(patch, enhance, u, v, dXdu, dXdv);
+        float jac = glm::dot(glm::cross(dXdu, dXdv), n_ref);
+        if (jac <= 0.0f)
+        {
+            return evaluateSurfaceOriginal(patch, u, v);
+        }
+
+        return applyEdgeCrossingGuard(patch, enhance, u, v, n_ref, point);
     }
 
     void evaluateDerivatives(

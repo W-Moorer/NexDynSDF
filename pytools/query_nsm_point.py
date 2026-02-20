@@ -26,6 +26,10 @@ def main():
     parser.add_argument('z', type=float, help='Query Point Z')
     parser.add_argument('-k', '--k-nearest', type=int, default=16, help='Number of candidate patches to check (default: 16)')
     parser.add_argument('--vis', action='store_true', help='Enable interactive visualization with PyVista')
+    parser.add_argument('-n', '--num-points', type=int, default=0, help='Number of random query points (0 disables batch mode)')
+    parser.add_argument('--seed', type=int, default=0, help='Random seed for batch mode')
+    parser.add_argument('--bbox-pad', type=float, default=0.05, help='Padding ratio for mesh bounding box in batch mode')
+    parser.add_argument('--vis-lines', type=int, default=200, help='Max number of query-to-nearest lines to draw in batch mode')
     
     args = parser.parse_args()
     
@@ -46,15 +50,153 @@ def main():
     model = NagataModelQuery(
         vertices=mesh_data.vertices,
         triangles=mesh_data.triangles,
-        tri_vertex_normals=mesh_data.tri_vertex_normals
+        tri_vertex_normals=mesh_data.tri_vertex_normals,
+        nsm_filepath=args.filepath
     )
     
     # Query
     query_pt = np.array([args.x, args.y, args.z])
+    def compute_surface_derivatives(model_obj, tri_idx: int, uv):
+        try:
+            u, v = float(uv[0]), float(uv[1])
+        except Exception:
+            return None
+        if not hasattr(model_obj, "_eval_patch_point_and_derivatives"):
+            return None
+        try:
+            _, dXdu, dXdv = model_obj._eval_patch_point_and_derivatives(int(tri_idx), u, v)
+        except Exception:
+            return None
+        n = np.cross(dXdu, dXdv)
+        n_len = float(np.linalg.norm(n))
+        if n_len > 1e-12:
+            n = n / n_len
+        return {
+            "dXdu": dXdu,
+            "dXdv": dXdv,
+            "surface_normal": n,
+            "jacobian_norm": float(n_len),
+        }
+
+    def run_query(pt: np.ndarray):
+        res = model.query_feature_aware(pt, k_nearest=args.k_nearest)
+        if not res:
+            res = model.query(pt, k_nearest=args.k_nearest)
+        if not res:
+            return None
+
+        diff = pt - res['nearest_point']
+        dot_val = float(np.dot(diff, res['normal']))
+        dist_geo = float(np.linalg.norm(diff))
+        eps_ambiguous = 1e-6
+        sign = 0.0 if abs(dot_val) < eps_ambiguous * max(1.0, dist_geo) else (1.0 if dot_val >= 0.0 else -1.0)
+        signed_distance = float(sign * res['distance'])
+
+        out = dict(res)
+        out['query_point'] = pt
+        out['signed_distance'] = signed_distance
+        out['dot_val'] = dot_val
+        out['dist_geo'] = dist_geo
+        if 'triangle_index' in out and 'uv' in out and out['uv'] is not None:
+            deriv = compute_surface_derivatives(model, out['triangle_index'], out['uv'])
+            if deriv is not None:
+                out.update(deriv)
+        return out
+
+    if args.num_points and args.num_points > 0:
+        rng = np.random.default_rng(int(args.seed))
+        vmin = np.min(mesh_data.vertices, axis=0)
+        vmax = np.max(mesh_data.vertices, axis=0)
+        size = vmax - vmin
+        pad = float(args.bbox_pad)
+        vmin = vmin - pad * size
+        vmax = vmax + pad * size
+
+        pts = rng.uniform(vmin, vmax, size=(int(args.num_points), 3))
+        print(f"\nBatch querying {pts.shape[0]} points in AABB:")
+        print(f"  min: [{vmin[0]:.6f}, {vmin[1]:.6f}, {vmin[2]:.6f}]")
+        print(f"  max: [{vmax[0]:.6f}, {vmax[1]:.6f}, {vmax[2]:.6f}]")
+
+        results = []
+        feature_counts = {}
+        for i in range(pts.shape[0]):
+            r = run_query(pts[i])
+            if not r:
+                continue
+            results.append(r)
+            ft = r.get('feature_type', 'UNKNOWN')
+            feature_counts[ft] = feature_counts.get(ft, 0) + 1
+
+        if not results:
+            print("Error: Batch query failed (no result found).")
+            return
+
+        signed_dists = np.array([r['signed_distance'] for r in results], dtype=float)
+        dists = np.array([r['distance'] for r in results], dtype=float)
+
+        print("-" * 40)
+        print("Batch Summary:")
+        print(f"  Results:         {len(results)}/{pts.shape[0]}")
+        print(f"  Distance min/max:{float(np.min(dists)):.6f} / {float(np.max(dists)):.6f}")
+        print(f"  Signed min/max:  {float(np.min(signed_dists)):.6f} / {float(np.max(signed_dists)):.6f}")
+        for k in sorted(feature_counts.keys()):
+            print(f"  {k:12s}: {feature_counts[k]}")
+        print("-" * 40)
+
+        if args.vis:
+            try:
+                import pyvista as pv
+                print("\nStarting visualization...")
+
+                from nagata_storage import get_eng_filepath, has_cached_data, load_enhanced_data
+                from visualize_nagata import create_nagata_mesh, create_nagata_mesh_enhanced
+
+                plotter = pv.Plotter()
+                if has_cached_data(args.filepath):
+                    eng_path = get_eng_filepath(args.filepath)
+                    cached_c_sharps = load_enhanced_data(eng_path)
+                    nagata_mesh, _ = create_nagata_mesh_enhanced(
+                        mesh_data.vertices,
+                        mesh_data.triangles,
+                        mesh_data.tri_vertex_normals,
+                        mesh_data.tri_face_ids,
+                        10,
+                        cached_c_sharps=cached_c_sharps
+                    )
+                else:
+                    nagata_mesh = create_nagata_mesh(
+                        mesh_data.vertices,
+                        mesh_data.triangles,
+                        mesh_data.tri_vertex_normals,
+                        mesh_data.tri_face_ids,
+                        10
+                    )
+                if nagata_mesh.n_points > 0:
+                    plotter.add_mesh(nagata_mesh, color='lightblue', opacity=0.15)
+
+                q_points = np.stack([r['query_point'] for r in results], axis=0)
+                q_poly = pv.PolyData(q_points)
+                q_poly['sdf'] = signed_dists
+                plotter.add_mesh(q_poly, scalars='sdf', cmap='coolwarm', point_size=6, render_points_as_spheres=True)
+
+                nearest_points = np.stack([r['nearest_point'] for r in results], axis=0)
+                n_poly = pv.PolyData(nearest_points)
+                plotter.add_mesh(n_poly, color='green', point_size=4, render_points_as_spheres=True)
+
+                num_lines = min(int(args.vis_lines), len(results))
+                for i in range(num_lines):
+                    line = pv.Line(results[i]['query_point'], results[i]['nearest_point'])
+                    plotter.add_mesh(line, color='gray', line_width=1)
+
+                plotter.add_axes()
+                plotter.show()
+            except ImportError:
+                print("Error: PyVista not installed. Install with `pip install pyvista` to use --vis.")
+        return
+
     print(f"\nQuerying point: {query_pt}")
-    
-    result = model.query(query_pt, k_nearest=args.k_nearest)
-    
+    result = run_query(query_pt)
+
     if result:
         print("-" * 40)
         print("Result Found:")
@@ -63,58 +205,60 @@ def main():
         print(f"  Surface Normal:  [{result['normal'][0]:.6f}, {result['normal'][1]:.6f}, {result['normal'][2]:.6f}]")
         print(f"  Patch Index:     {result['triangle_index']}")
         print(f"  UV Parameters:   u={result['uv'][0]:.4f}, v={result['uv'][1]:.4f}")
-        
-        # Calculate signed distance sign
-        diff = query_pt - result['nearest_point']
-        sign = 1.0 if np.dot(diff, result['normal']) >= 0 else -1.0
-        print(f"  Signed Distance: {sign * result['distance']:.6f}")
+        if 'surface_normal' in result:
+            sn = result['surface_normal']
+            print(f"  dXduxdXdv:       [{sn[0]:.6f}, {sn[1]:.6f}, {sn[2]:.6f}]")
+            print(f"  Jacobian Norm:   {result['jacobian_norm']:.6f}")
+        if 'feature_type' in result:
+            print(f"  Feature Type:    {result['feature_type']}")
+        print(f"  Signed Distance: {result['signed_distance']:.6f}")
         print("-" * 40)
-        
-        # Visualization
+
         if args.vis:
             try:
                 import pyvista as pv
                 print("\nStarting visualization...")
-                
+
+                from nagata_storage import get_eng_filepath, has_cached_data, load_enhanced_data
+                from visualize_nagata import create_nagata_mesh, create_nagata_mesh_enhanced
+
                 plotter = pv.Plotter()
-                
-                # 1. Add Mesh (Wireframe or Surface)
-                # Create PyVista mesh from NSM data
-                # Identify triangles
-                faces = np.hstack([[3, tri[0], tri[1], tri[2]] for tri in mesh_data.triangles])
-                surf = pv.PolyData(mesh_data.vertices, faces)
-                
-                plotter.add_mesh(surf, color='white', style='wireframe', opacity=0.3, label='NSM Wireframe')
-                plotter.add_mesh(surf, color='lightblue', opacity=0.1, label='NSM Surface')
-                
-                # 2. Add Query Point (Red Sphere)
-                plotter.add_mesh(
-                    pv.Sphere(radius=0.05, center=query_pt), 
-                    color='red', label='Query Point'
-                )
-                
-                # 3. Add Nearest Point (Green Sphere)
+                if has_cached_data(args.filepath):
+                    eng_path = get_eng_filepath(args.filepath)
+                    cached_c_sharps = load_enhanced_data(eng_path)
+                    nagata_mesh, _ = create_nagata_mesh_enhanced(
+                        mesh_data.vertices,
+                        mesh_data.triangles,
+                        mesh_data.tri_vertex_normals,
+                        mesh_data.tri_face_ids,
+                        10,
+                        cached_c_sharps=cached_c_sharps
+                    )
+                else:
+                    nagata_mesh = create_nagata_mesh(
+                        mesh_data.vertices,
+                        mesh_data.triangles,
+                        mesh_data.tri_vertex_normals,
+                        mesh_data.tri_face_ids,
+                        10
+                    )
+                if nagata_mesh.n_points > 0:
+                    plotter.add_mesh(nagata_mesh, color='lightblue', opacity=0.2)
+
+                plotter.add_mesh(pv.Sphere(radius=0.05, center=query_pt), color='red', label='Query Point')
                 nearest_pt = result['nearest_point']
-                plotter.add_mesh(
-                    pv.Sphere(radius=0.05, center=nearest_pt), 
-                    color='green', label='Nearest Point'
-                )
-                
-                # 4. Add Normal Vector (Yellow Arrow) at Query Point
-                # Shows the gradient direction at the query point
+                plotter.add_mesh(pv.Sphere(radius=0.05, center=nearest_pt), color='green', label='Nearest Point')
+
                 normal = result['normal']
                 arrow = pv.Arrow(start=query_pt, direction=normal, scale=0.5)
                 plotter.add_mesh(arrow, color='yellow', label='SDF Gradient')
-                
-                # 5. Add Connection Line (Query -> Nearest)
+
                 line = pv.Line(query_pt, nearest_pt)
                 plotter.add_mesh(line, color='blue', line_width=3, label='Distance')
-                
-                # Set Legend Font to Times New Roman
+
                 plotter.add_legend(font_family='times', bcolor=(0.1, 0.1, 0.1), border=True)
                 plotter.add_axes()
                 plotter.show()
-                
             except ImportError:
                 print("Error: PyVista not installed. Install with `pip install pyvista` to use --vis.")
     else:

@@ -158,7 +158,7 @@ def create_pyvista_mesh(mesh_data: NSMMeshData) -> pv.PolyData:
 def visualize_nsm(filepath: str, 
                   show_normals: bool = True,
                   normal_scale: float = 0.01,
-                  normal_skip: int = 10,
+                  normal_skip: int = 1,
                   show_edges: bool = True,
                   color_by_face_id: bool = False):
     """
@@ -277,7 +277,7 @@ def main():
         print("\n选项:")
         print("  --no-normals       不显示法向量")
         print("  --normal-scale N   设置法向量缩放比例 (默认: 0.01)")
-        print("  --normal-skip N    设置法向量显示密度 (默认: 10)")
+        print("  --normal-skip N    设置法向量显示密度 (默认: 1)")
         print("  --no-edges         不显示网格边")
         print("  --color-by-id      按面片ID着色")
         print("\n示例:")
@@ -290,7 +290,7 @@ def main():
     # 解析选项
     show_normals = '--no-normals' not in sys.argv
     normal_scale = 0.01
-    normal_skip = 10
+    normal_skip = 1
     show_edges = '--no-edges' not in sys.argv
     color_by_face_id = '--color-by-id' in sys.argv
     

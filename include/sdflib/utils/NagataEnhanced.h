@@ -33,7 +33,7 @@ namespace NagataEnhanced
     // ============================================================
     
     constexpr char ENG_MAGIC[4] = {'E', 'N', 'G', '\0'};
-    constexpr uint32_t ENG_VERSION = 1;
+    constexpr uint32_t ENG_VERSION = 2;
     constexpr float GAP_THRESHOLD = 1e-4f;
     
     // ============================================================
@@ -167,7 +167,11 @@ namespace NagataEnhanced
      * @brief Compute c_sharp for all crease edges
      */
     EnhancedNagataData computeCSharpForEdges(
-        const std::map<EdgeKey, CreaseEdgeInfo>& creaseEdges);
+        const std::map<EdgeKey, CreaseEdgeInfo>& creaseEdges,
+        const std::vector<glm::vec3>& vertices,
+        const std::vector<std::array<uint32_t, 3>>& faces,
+        const std::vector<std::array<glm::vec3, 3>>& faceNormals,
+        float k_factor = 0.0f);
     
     // ============================================================
     // Main Entry API
@@ -186,83 +190,6 @@ namespace NagataEnhanced
         const std::string& nsmPath,
         bool saveCache = true);
     
-    // ============================================================
-    // Enhanced surface evaluation
-    // ============================================================
-    
-    /**
-     * @brief Smoothstep weight function (quintic polynomial)
-     */
-    float smoothstep(float t);
-    
-    /**
-     * @brief Enhanced Nagata surface evaluation
-     * 
-     * @param patch Original Nagata patch data
-     * @param u Parameter u
-     * @param v Parameter v (satisfies 0 <= v <= u <= 1)
-     * @param c_sharp_1 c_sharp of edge 1 (v0-v1)
-     * @param c_sharp_2 c_sharp of edge 2 (v1-v2)
-     * @param c_sharp_3 c_sharp of edge 3 (v0-v2)
-     * @param isCrease Whether the three edges are crease edges
-     * @param d0 Influence width (0.05 ~ 0.15)
-     */
-    glm::vec3 evaluateSurfaceEnhanced(
-        const NagataPatch::NagataPatchData& patch,
-        float u, float v,
-        glm::vec3 c_sharp_1, glm::vec3 c_sharp_2, glm::vec3 c_sharp_3,
-        std::array<bool, 3> isCrease,
-        float d0 = 0.1f);
-
-    /**
-     * @brief Smoothstep derivative
-     * d/dt (t^3 * (6t^2 - 15t + 10)) = 30t^2(1-t)^2
-     */
-    float smoothstepDeriv(float t);
-
-    /**
-     * @brief Enhanced Nagata surface derivatives calculation
-     * 
-     * Accounts for the dependency of c_eff on u, v
-     */
-    void evaluateDerivativesEnhanced(
-        const NagataPatch::NagataPatchData& patch,
-        float u, float v,
-        glm::vec3 c_sharp_1, glm::vec3 c_sharp_2, glm::vec3 c_sharp_3,
-        std::array<bool, 3> isCrease,
-        float d0,
-        glm::vec3& dXdu, glm::vec3& dXdv);
-
-    /**
-     * @brief Evaluate enhanced Nagata surface normal
-     */
-    glm::vec3 evaluateNormalEnhanced(
-        const NagataPatch::NagataPatchData& patch,
-        float u, float v,
-        glm::vec3 c_sharp_1, glm::vec3 c_sharp_2, glm::vec3 c_sharp_3,
-        std::array<bool, 3> isCrease,
-        float d0 = 0.1f);
-
-    /**
-     * @brief Find nearest point on enhanced Nagata patch (Newton Iteration)
-     */
-    float findNearestPointOnEnhancedNagataPatch(
-        glm::vec3 point,
-        const NagataPatch::NagataPatchData& patch,
-        const EnhancedNagataData& enhancedData,
-        const std::array<uint32_t, 3>& vertexIndices,
-        glm::vec3& nearestPoint, 
-        float& minU, float& minV);
-
-    /**
-     * @brief Evaluate signed distance between point and enhanced Nagata patch
-     */
-    float getSignedDistPointAndEnhancedNagataPatch(
-        glm::vec3 point,
-        const NagataPatch::NagataPatchData& patch,
-        const EnhancedNagataData& enhancedData,
-        const std::array<uint32_t, 3>& vertexIndices,
-        glm::vec3* outNearestPoint = nullptr);
 }
 }
 

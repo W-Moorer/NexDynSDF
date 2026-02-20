@@ -87,7 +87,7 @@ static bool test_crease_csharp_orientation()
         return false;
     }
 
-    const auto enhancedData = NagataEnhanced::computeCSharpForEdges(creaseEdges);
+    const auto enhancedData = NagataEnhanced::computeCSharpForEdges(creaseEdges, vertices, faces, faceNormals);
     if (enhancedData.empty())
     {
         std::cerr << "Crease test: c_sharp map is empty" << std::endl;
@@ -121,7 +121,15 @@ static bool test_crease_csharp_orientation()
         const glm::vec3 c2 = enhancedData.getCSharpOriented(vi[1], vi[2]);
         const glm::vec3 c3 = enhancedData.getCSharpOriented(vi[0], vi[2]);
 
-        return NagataEnhanced::evaluateSurfaceEnhanced(patch, u, v, c1, c2, c3, isCrease, 0.1f);
+        NagataPatch::PatchEnhancementData enhance;
+        enhance.edges[0].enabled = isCrease[0];
+        enhance.edges[1].enabled = isCrease[1];
+        enhance.edges[2].enabled = isCrease[2];
+        enhance.edges[0].c_sharp = c1;
+        enhance.edges[1].c_sharp = c2;
+        enhance.edges[2].c_sharp = c3;
+
+        return NagataPatch::evaluateSurface(patch, enhance, u, v);
     };
 
     const float t = 0.3f;
