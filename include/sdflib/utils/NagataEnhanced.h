@@ -33,7 +33,7 @@ namespace NagataEnhanced
     // ============================================================
     
     constexpr char ENG_MAGIC[4] = {'E', 'N', 'G', '\0'};
-    constexpr uint32_t ENG_VERSION = 2;
+    constexpr uint32_t ENG_VERSION = 1;
     constexpr float GAP_THRESHOLD = 1e-4f;
     
     // ============================================================

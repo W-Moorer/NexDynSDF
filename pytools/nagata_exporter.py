@@ -39,17 +39,27 @@ def _compute_vertex_normals(vertices: np.ndarray, faces: np.ndarray, fallback: n
     return normals
 
 
-def export_enhanced_nagata_subdivision(input_path: str, output_dir: str, subdivision_level: int, tolerance: float):
+def export_enhanced_nagata_subdivision(
+    input_path: str,
+    output_dir: str,
+    subdivision_level: int,
+    tolerance: float,
+    *,
+    use_cache: bool = True,
+    dtype: np.dtype = np.float64
+):
     mesh_data = load_nsm(input_path)
-    vertices = mesh_data.vertices
+    vertices = mesh_data.vertices.astype(dtype, copy=False)
     triangles = mesh_data.triangles
-    tri_vertex_normals = mesh_data.tri_vertex_normals
+    tri_vertex_normals = mesh_data.tri_vertex_normals.astype(dtype, copy=False)
 
     eng_path = get_eng_filepath(input_path)
-    c_sharps = load_enhanced_data(eng_path)
+    c_sharps = load_enhanced_data(eng_path) if use_cache else None
     if c_sharps is None:
         crease_edges = detect_crease_edges(vertices, triangles, tri_vertex_normals)
         c_sharps = compute_c_sharps_for_edges(crease_edges, vertices, triangles, tri_vertex_normals, k_factor=tolerance)
+    elif dtype != np.float64:
+        c_sharps = {k: v.astype(dtype, copy=False) for k, v in c_sharps.items()}
 
     resolution = _resolution_for_level(subdivision_level)
 
@@ -63,10 +73,11 @@ def export_enhanced_nagata_subdivision(input_path: str, output_dir: str, subdivi
         cached_c_sharps=c_sharps
     )
     all_vertices, all_faces = _polydata_to_triangles(mesh)
+    all_vertices = all_vertices.astype(dtype, copy=False)
     all_normals = _compute_vertex_normals(
         all_vertices,
         all_faces,
-        np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        np.array([0.0, 0.0, 1.0], dtype=dtype)
     )
 
     output_dir = Path(output_dir)

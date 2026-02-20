@@ -10,9 +10,10 @@ namespace fs = std::filesystem;
 
 void printUsage(const char* programName)
 {
-    std::cout << "Usage: " << programName << " <input.nsm> <output.eng>\n"
+    std::cout << "Usage: " << programName << " <input.nsm> <output.eng> [k_factor]\n"
               << "  <input.nsm>   NSM mesh file\n"
-              << "  <output.eng>  Output ENG file\n";
+              << "  <output.eng>  Output ENG file\n"
+              << "  [k_factor]   Crease damping factor (default: 0.1)\n";
 }
 
 int main(int argc, char** argv)
@@ -30,6 +31,11 @@ int main(int argc, char** argv)
 
     std::string inputFile = argv[1];
     std::string outputFile = argv[2];
+    float kFactor = 0.1f;
+    if (argc >= 4)
+    {
+        kFactor = std::stof(argv[3]);
+    }
 
     if (!fs::exists(inputFile))
     {
@@ -65,8 +71,10 @@ int main(int argc, char** argv)
     }
 
     SPDLOG_INFO("Computing enhanced Nagata data...");
-    auto enhancedData = sdflib::NagataEnhanced::computeOrLoadEnhancedData(
-        meshData.vertices, meshData.faces, meshData.faceNormals, inputFile, false);
+    auto creaseEdges = sdflib::NagataEnhanced::detectCreaseEdges(
+        meshData.vertices, meshData.faces, meshData.faceNormals);
+    auto enhancedData = sdflib::NagataEnhanced::computeCSharpForEdges(
+        creaseEdges, meshData.vertices, meshData.faces, meshData.faceNormals, kFactor);
 
     SPDLOG_INFO("Saving ENG to file...");
     if (!sdflib::NagataEnhanced::saveEnhancedData(outputFile, enhancedData))

@@ -237,7 +237,7 @@ int main(int argc, char** argv)
                     if (!enhancedData.hasEdge(key)) return;
 
                     pe.edges[edgeIdx].enabled = true;
-                    pe.edges[edgeIdx].c_sharp = enhancedData.getCSharpOriented(a, b);
+                    pe.edges[edgeIdx].c_sharp = enhancedData.getCSharp(key);
                     pe.edges[edgeIdx].k_factor = kFactor;
                     enabledEdgesTotal++;
                 };

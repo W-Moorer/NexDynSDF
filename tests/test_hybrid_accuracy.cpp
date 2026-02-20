@@ -118,9 +118,9 @@ static bool test_crease_csharp_orientation()
             enhancedData.hasEdge(k02),
         };
 
-        const glm::vec3 c1 = enhancedData.getCSharpOriented(vi[0], vi[1]);
-        const glm::vec3 c2 = enhancedData.getCSharpOriented(vi[1], vi[2]);
-        const glm::vec3 c3 = enhancedData.getCSharpOriented(vi[0], vi[2]);
+        const glm::vec3 c1 = enhancedData.getCSharp(k01);
+        const glm::vec3 c2 = enhancedData.getCSharp(k12);
+        const glm::vec3 c3 = enhancedData.getCSharp(k02);
 
         NagataPatch::PatchEnhancementData enhance;
         enhance.edges[0].enabled = isCrease[0];

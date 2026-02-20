@@ -196,12 +196,12 @@ def evaluate_nagata_patch(
     Returns:
         points: 曲面采样点坐标, shape (..., 3)
     """
-    # 确保u, v是数组
-    u = np.atleast_1d(u)
-    v = np.atleast_1d(v)
+    dtype = np.asarray(x00).dtype
+    u = np.atleast_1d(np.asarray(u, dtype=dtype))
+    v = np.atleast_1d(np.asarray(v, dtype=dtype))
     
     # 计算各项
-    one_minus_u = 1 - u
+    one_minus_u = np.array(1.0, dtype=dtype) - u
     u_minus_v = u - v
     
     # 线性项
@@ -546,11 +546,12 @@ def evaluate_nagata_patch_with_crease(
     Returns:
         points: 曲面采样点坐标
     """
-    u = np.atleast_1d(u)
-    v = np.atleast_1d(v)
+    dtype = np.asarray(x00).dtype
+    u = np.atleast_1d(np.asarray(u, dtype=dtype))
+    v = np.atleast_1d(np.asarray(v, dtype=dtype))
     
     # 线性项
-    one_minus_u = 1 - u
+    one_minus_u = np.array(1.0, dtype=dtype) - u
     u_minus_v = u - v
     
     linear = (x00 * one_minus_u[:, None] + 
@@ -563,7 +564,7 @@ def evaluate_nagata_patch_with_crease(
                       c3_orig * (one_minus_u * v)[:, None])
     
     # 计算修正项 (Correction) - v3: 高斯衰减，无硬截断
-    correction = np.zeros((len(u), 3))
+    correction = np.zeros((len(u), 3), dtype=dtype)
     
     # 边1: v=0, d1=v, 基函数 (1-u)(u-v)
     if is_crease[0]:
@@ -742,8 +743,6 @@ def sample_nagata_triangle_with_crease(
     vertices = []
     vertex_map = {}
     
-    n_ref = _compute_reference_normal(x00, x10, x11, n00, n10, n11) if guard_edge_crossing else None
-
     for i, u in enumerate(u_vals):
         for j, v in enumerate(v_vals):
             if v <= u + 1e-10:
@@ -756,22 +755,6 @@ def sample_nagata_triangle_with_crease(
                     k_factor,
                     enforce_constraints=enforce_jacobian or guard_edge_crossing
                 )
-                if guard_edge_crossing and any(is_crease):
-                    orig_point = evaluate_nagata_patch(
-                        x00, x10, x11,
-                        c1_orig, c2_orig, c3_orig,
-                        np.array([u]), np.array([v])
-                    ).flatten()
-                    guarded_point = _apply_edge_crossing_guard(
-                        orig_point,
-                        point.flatten(),
-                        x00, x10, x11,
-                        c1_sharp, c2_sharp, c3_sharp,
-                        tuple(is_crease),
-                        float(u), float(v),
-                        n_ref
-                    )
-                    point = guarded_point.reshape(1, 3)
                 vertex_map[(i, j)] = len(vertices)
                 vertices.append(point.flatten())
     
@@ -888,16 +871,20 @@ def evaluate_nagata_derivatives(
     Returns:
         dXdu, dXdv: 曲面在 u, v 方向的偏导数
     """
+    dtype = np.asarray(x00).dtype
+    u = dtype.type(u)
+    v = dtype.type(v)
+    one = dtype.type(1.0)
     # 基础几何导数 (线性部分)
     dLin_du = -x00 + x10
     dLin_dv = -x10 + x11
     
     # 距离参数定义
-    d_params = [v, 1.0 - u, u - v]
+    d_params = [v, one - u, u - v]
     
     # 距离对 (u,v) 的导数 [dd/du, dd/dv]
-    dd_du = [0.0, -1.0, 1.0]
-    dd_dv = [1.0, 0.0, -1.0]
+    dd_du = [dtype.type(0.0), dtype.type(-1.0), dtype.type(1.0)]
+    dd_dv = [dtype.type(1.0), dtype.type(0.0), dtype.type(-1.0)]
     
     # 准备系数
     coeffs = [c1, c2, c3]

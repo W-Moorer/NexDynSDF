@@ -18,9 +18,6 @@ def _load_obj(path: Path):
             if line.startswith("v "):
                 parts = line.strip().split()
                 vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
-            elif line.startswith("vn "):
-                parts = line.strip().split()
-                normals.append([float(parts[1]), float(parts[2]), float(parts[3])])
             elif line.startswith("f "):
                 items = line.strip().split()[1:]
                 face = []
@@ -41,22 +38,22 @@ def _load_obj(path: Path):
     return vertices, normals, faces
 
 
-def _compute_vertex_normals(vertices: np.ndarray, faces: np.ndarray):
+def _compute_vertex_normals(vertices: np.ndarray, faces: np.ndarray, eps: float = 1e-12):
     normals = np.zeros_like(vertices)
     for f in faces:
         v0, v1, v2 = vertices[f[0]], vertices[f[1]], vertices[f[2]]
         n = np.cross(v1 - v0, v2 - v0)
         n_len = np.linalg.norm(n)
-        if n_len < 1e-12:
+        if n_len < eps:
             continue
         n = n / n_len
         normals[f[0]] += n
         normals[f[1]] += n
         normals[f[2]] += n
     norms = np.linalg.norm(normals, axis=1)
-    norms[norms < 1e-12] = 1.0
-    normals = normals / norms[:, None]
-    return normals
+    valid = norms >= eps
+    normals[valid] = normals[valid] / norms[valid, None]
+    return normals, valid
 
 
 def _compare_meshes(obj_a: Path, obj_b: Path, pos_tol: float, normal_tol_deg: float):
@@ -88,15 +85,26 @@ def _compare_meshes(obj_a: Path, obj_b: Path, pos_tol: float, normal_tol_deg: fl
     result["pos_mean"] = float(np.mean(dist)) if len(dist) else 0.0
 
     if n_a is None:
-        n_a = _compute_vertex_normals(v_a, f_a)
+        n_a, valid_a = _compute_vertex_normals(v_a, f_a)
+    else:
+        valid_a = np.linalg.norm(n_a, axis=1) >= 1e-12
+        n_a[valid_a] = n_a[valid_a] / np.linalg.norm(n_a[valid_a], axis=1)[:, None]
     if n_b is None:
-        n_b = _compute_vertex_normals(v_b, f_b)
+        n_b, valid_b = _compute_vertex_normals(v_b, f_b)
+    else:
+        valid_b = np.linalg.norm(n_b, axis=1) >= 1e-12
+        n_b[valid_b] = n_b[valid_b] / np.linalg.norm(n_b[valid_b], axis=1)[:, None]
 
-    dot = np.sum(n_a * n_b, axis=1)
-    dot = np.clip(dot, -1.0, 1.0)
-    ang = np.degrees(np.arccos(dot))
-    result["normal_max_deg"] = float(np.max(ang)) if len(ang) else 0.0
-    result["normal_mean_deg"] = float(np.mean(ang)) if len(ang) else 0.0
+    valid = valid_a & valid_b
+    if np.any(valid):
+        dot = np.sum(n_a[valid] * n_b[valid], axis=1)
+        dot = np.clip(dot, -1.0, 1.0)
+        ang = np.degrees(np.arccos(dot))
+        result["normal_max_deg"] = float(np.max(ang)) if len(ang) else 0.0
+        result["normal_mean_deg"] = float(np.mean(ang)) if len(ang) else 0.0
+    else:
+        result["normal_max_deg"] = 0.0
+        result["normal_mean_deg"] = 0.0
 
     result["pass"] = (
         result["topology_equal"] and
@@ -141,7 +149,14 @@ def main():
 
     for level in args.levels:
         _run_cpp_exporter(cpp_exe, nsm_path, cpp_dir, level, args.tolerance)
-        export_enhanced_nagata_subdivision(str(nsm_path), str(py_dir), level, args.tolerance)
+        export_enhanced_nagata_subdivision(
+            str(nsm_path),
+            str(py_dir),
+            level,
+            args.tolerance,
+            use_cache=False,
+            dtype=np.float32
+        )
 
         cpp_obj = cpp_dir / f"{stem}_enhanced_L{level}.obj"
         py_obj = py_dir / f"{stem}_enhanced_L{level}.obj"

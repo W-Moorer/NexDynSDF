@@ -172,21 +172,28 @@ namespace NagataEnhanced
             glm::vec3 A = vertices[edgeKey.v0];
             glm::vec3 B = vertices[edgeKey.v1];
             
-            auto getNormalAtVertex = [&](int triIdx, uint32_t globalVIdx) -> glm::vec3
+            auto getNormalAtVertex = [&](int triIdx, uint32_t globalVIdx, glm::vec3& outNormal) -> bool
             {
                 const auto& tri = faces[triIdx];
                 for (int i = 0; i < 3; ++i)
                 {
                     if (tri[i] == globalVIdx)
-                        return faceNormals[triIdx][i];
+                    {
+                        outNormal = faceNormals[triIdx][i];
+                        return true;
+                    }
                 }
-                return glm::vec3(0.0f, 0.0f, 1.0f);
+                return false;
             };
             
-            glm::vec3 n_A_L = getNormalAtVertex(triL.triIdx, edgeKey.v0);
-            glm::vec3 n_B_L = getNormalAtVertex(triL.triIdx, edgeKey.v1);
-            glm::vec3 n_A_R = getNormalAtVertex(triR.triIdx, edgeKey.v0);
-            glm::vec3 n_B_R = getNormalAtVertex(triR.triIdx, edgeKey.v1);
+            glm::vec3 n_A_L, n_B_L, n_A_R, n_B_R;
+            if (!getNormalAtVertex(triL.triIdx, edgeKey.v0, n_A_L) ||
+                !getNormalAtVertex(triL.triIdx, edgeKey.v1, n_B_L) ||
+                !getNormalAtVertex(triR.triIdx, edgeKey.v0, n_A_R) ||
+                !getNormalAtVertex(triR.triIdx, edgeKey.v1, n_B_R))
+            {
+                continue;
+            }
             
             glm::vec3 e = B - A;
             glm::vec3 c_L = NagataPatch::computeCurvature(e, n_A_L, n_B_L);
@@ -262,13 +269,19 @@ namespace NagataEnhanced
         G11 += lambda;
         
         float det = G00 * G11 - G01 * G01;
+        float lA = 0.0f;
+        float lB = 0.0f;
         if (std::abs(det) < 1e-12f)
         {
-            return glm::vec3(0.0f);
+            float eLen = glm::length(e);
+            lA = eLen;
+            lB = eLen;
         }
-        
-        float lA = (G11 * r0 - G01 * r1) / det;
-        float lB = (-G01 * r0 + G00 * r1) / det;
+        else
+        {
+            lA = (G11 * r0 - G01 * r1) / det;
+            lB = (-G01 * r0 + G00 * r1) / det;
+        }
         
         glm::vec3 T_A = lA * dA;
         glm::vec3 T_B = lB * dB;
