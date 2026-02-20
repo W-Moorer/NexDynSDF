@@ -341,6 +341,27 @@ SdfSampler <input_sdf_file> <output_raw_file> [grid_resolution]
 | bbox_max.z | float32 | 4 bytes | 包围盒最大Z |
 | grid_data | float32[] | gridRes³ × 4 bytes | 距离场数据 |
 
+### NagataExporter 工具
+
+基于NSM文件导出增强Nagata细分结果为OBJ。
+
+**位置**: `build/Release/NagataExporter.exe`
+
+**用法**:
+
+```
+NagataExporter <input.nsm> <output_dir> <subdivision_level> [tolerance]
+
+参数:
+  <input.nsm>           NSM输入文件
+  <output_dir>          OBJ输出目录
+  <subdivision_level>   细分级别 (1,2,3...)
+  [tolerance]           k_factor (默认 0.1)
+```
+
+**输出命名**:
+`{inputStem}_enhanced_L{subdivisionLevel}.obj`
+
 **Python读取示例**:
 
 ```python
@@ -433,7 +454,23 @@ python pytools/nsm_reader.py models/nsm/Gear_I.nsm --color-by-id
 python pytools/nsm_reader.py models/nsm/Gear_I.nsm --normal-scale 0.005 --normal-skip 20
 ```
 
-#### 5. 完整工作流程示例
+#### 5. Nagata增强验证
+
+```powershell
+# C++导出
+.\NagataExporter models/nsm/Gear_I.nsm output/nagata_cpp 2 0.1
+
+# Python导出
+python pytools/nagata_exporter.py models/nsm/Gear_I.nsm output/nagata_py --levels 1 2 3 --tolerance 0.1
+
+# C++/Python对比验证
+python pytools/validate_nagata.py --nsm models/nsm/Gear_I.nsm --cpp .\NagataExporter --output output/nagata_validation --levels 1 2 3 --tolerance 0.1
+
+# 叠加可视化
+python pytools/visualize_obj_nagata.py output/nagata_cpp/Gear_I_enhanced_L2.obj --overlay output/nagata_py/Gear_I_enhanced_L2.obj
+```
+
+#### 6. 完整工作流程示例
 
 ```powershell
 # 步骤1: 从OBJ生成SDF

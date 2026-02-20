@@ -57,6 +57,7 @@ endif()
 
 # OpenMP
 find_package(OpenMP REQUIRED)
+find_package(Python3 COMPONENTS Interpreter QUIET)
 
 # ============ Library Target ============
 
@@ -120,6 +121,14 @@ add_executable(EngExporter
 
 target_link_libraries(EngExporter PRIVATE sdflib)
 
+# ============ NagataExporter Tool ============
+
+add_executable(NagataExporter
+    tools/NagataExporter/main.cpp
+)
+
+target_link_libraries(NagataExporter PRIVATE sdflib)
+
 # ============ Test Executable ============
 
 add_executable(test_all tests/test_all.cpp)
@@ -129,6 +138,20 @@ add_test(NAME all_test COMMAND test_all)
 add_executable(test_hybrid_accuracy tests/test_hybrid_accuracy.cpp)
 target_link_libraries(test_hybrid_accuracy PRIVATE sdflib)
 add_test(NAME hybrid_accuracy_test COMMAND test_hybrid_accuracy)
+
+if(Python3_Interpreter_FOUND)
+    add_test(
+        NAME nagata_validation
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/pytools/validate_nagata.py
+            --nsm ${CMAKE_SOURCE_DIR}/models/nsm/Gear_I.nsm
+            --cpp $<TARGET_FILE:NagataExporter>
+            --output ${CMAKE_SOURCE_DIR}/output/nagata_validation
+            --levels 1 2 3
+            --tolerance 0.1
+            --pos-tol 2e-5
+    )
+endif()
 
 # Output configuration info
 message(STATUS "========================================")

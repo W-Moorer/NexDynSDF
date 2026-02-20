@@ -14,6 +14,8 @@
 | `check_nagata_cracks.py` | Nagata Patch几何裂缝检测工具 | PyVista |
 | `visualize_nagata.py` | NSM文件Nagata曲面可视化（支持裂缝修复） | PyVista |
 | `visualize_obj_nagata.py` | OBJ文件Nagata曲面可视化（支持法向量计算） | PyVista |
+| `nagata_exporter.py` | NSM增强Nagata细分导出OBJ | - |
+| `validate_nagata.py` | C++/Python Nagata结果对比验证 | - |
 | `visualize_sdf.py` | SDF零等值面可视化 | Matplotlib / Plotly |
 | `visualize_sdf_pyvista.py` | SDF零等值面可视化（交互式） | PyVista |
 | `visualize_sdf_pyvista_offscreen.py` | SDF零等值面可视化（离屏渲染保存图片） | PyVista |
@@ -240,6 +242,8 @@ python visualize_obj_nagata.py <obj文件路径>
 | `--merge-vertices` | **强制合并重合顶点** (修复破面) | 否 |
 | `--no-compare` | 不显示原始网格对比 | 显示对比 |
 | `--edges` | 显示网格边 | 不显示 |
+| `--overlay` | 叠加对比第二个OBJ模型 | 无 |
+| `--overlay-opacity` | 叠加模型透明度 | 0.5 |
 
 #### 示例
 ```bash
@@ -262,7 +266,58 @@ python visualize_obj_nagata.py model.obj -r 15
 
 ---
 
-## 5. visualize_sdf.py - SDF零等值面可视化（Matplotlib/Plotly）
+## 5. nagata_exporter.py - NSM增强Nagata细分导出
+
+### 功能
+- 读取NSM并执行增强Nagata细分
+- 输出Wavefront OBJ文件（v/vn/f）
+- 支持多级细分批量导出
+
+### 使用方法
+```bash
+python nagata_exporter.py <nsm文件路径> <输出目录> --levels 1 2 3 --tolerance 0.1
+```
+
+### 命令行参数
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `input` | NSM文件路径 | 必需 |
+| `output_dir` | 输出目录 | 必需 |
+| `--level` | 单级细分级别 | 1 |
+| `--levels` | 多级细分列表 | 空 |
+| `--tolerance` | k_factor | 0.1 |
+
+### 输出命名
+`{inputStem}_enhanced_L{subdivisionLevel}.obj`
+
+---
+
+## 6. validate_nagata.py - C++/Python Nagata结果对比
+
+### 功能
+- 调用C++ NagataExporter与Python导出
+- 量化顶点/拓扑/法向差异
+- 支持多级细分批量验证
+
+### 使用方法
+```bash
+python validate_nagata.py --nsm ../models/nsm/Gear_I.nsm --cpp ../build/Release/NagataExporter.exe --output ./nagata_validation --levels 1 2 3 --tolerance 0.1
+```
+
+### 命令行参数
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--nsm` | NSM文件路径 | 必需 |
+| `--cpp` | C++导出工具路径 | 必需 |
+| `--output` | 输出目录 | 必需 |
+| `--levels` | 细分级别列表 | 1 2 3 |
+| `--tolerance` | k_factor | 0.1 |
+| `--pos-tol` | 位置误差阈值 | 1e-6 |
+| `--normal-tol` | 法向夹角阈值(度) | 0.5 |
+
+---
+
+## 7. visualize_sdf.py - SDF零等值面可视化（Matplotlib/Plotly）
 
 
 ### 功能
@@ -318,7 +373,7 @@ python visualize_sdf.py approx_sdf.raw exact_sdf.raw -t "Approximate" "Exact"
 
 ---
 
-## 6. visualize_sdf_pyvista.py - SDF零等值面可视化（PyVista交互式）
+## 8. visualize_sdf_pyvista.py - SDF零等值面可视化（PyVista交互式）
 
 ### 功能
 - 使用PyVista进行高性能3D可视化
@@ -370,7 +425,7 @@ python visualize_sdf_pyvista.py gear_sampled.raw --volume --axis z
 
 ---
 
-## 7. visualize_sdf_pyvista_offscreen.py - SDF可视化（离屏渲染）
+## 9. visualize_sdf_pyvista_offscreen.py - SDF可视化（离屏渲染）
 
 ### 功能
 - 不打开交互窗口，直接生成静态图片
@@ -493,4 +548,3 @@ python visualize_sdf_pyvista_offscreen.py data.raw -o output.png
 - **2025-02-01**: 添加 `visualize_sdf_pyvista_offscreen.py` - 离屏渲染版本
 - **2025-01-31**: 添加 `visualize_sdf_pyvista.py` - PyVista交互式可视化
 - **2025-01-30**: 添加 `visualize_sdf.py` - 基础SDF可视化工具
-
