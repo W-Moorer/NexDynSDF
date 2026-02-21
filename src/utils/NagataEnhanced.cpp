@@ -359,6 +359,51 @@ namespace NagataEnhanced
         return P_lin - Q1 - Q2 - Q3;
     }
 
+    static void evaluateDerivativesRaw(
+        const NagataPatch::NagataPatchData& patch,
+        const NagataPatch::PatchEnhancementData& enhance,
+        float u, float v,
+        glm::vec3& dXdu, glm::vec3& dXdv)
+    {
+        NagataPatch::BlendingResult blend;
+        NagataPatch::computeEffectiveCoefficients(patch, enhance, u, v, blend);
+
+        const glm::vec3& x00 = patch.vertices[0];
+        const glm::vec3& x10 = patch.vertices[1];
+        const glm::vec3& x11 = patch.vertices[2];
+
+        glm::vec3 dLin_du = -x00 + x10;
+        glm::vec3 dLin_dv = -x10 + x11;
+
+        auto computeTermDerivs = [&](int idx, float b, float db_du, float db_dv, glm::vec3& dq_du, glm::vec3& dq_dv)
+        {
+            dq_du = blend.dc_du[idx] * b + blend.c_eff[idx] * db_du;
+            dq_dv = blend.dc_dv[idx] * b + blend.c_eff[idx] * db_dv;
+        };
+
+        glm::vec3 dQ1_du, dQ1_dv;
+        glm::vec3 dQ2_du, dQ2_dv;
+        glm::vec3 dQ3_du, dQ3_dv;
+
+        float b1 = (1.0f - u) * (u - v);
+        float db1_du = 1.0f - 2.0f * u + v;
+        float db1_dv = u - 1.0f;
+        computeTermDerivs(0, b1, db1_du, db1_dv, dQ1_du, dQ1_dv);
+
+        float b2 = (u - v) * v;
+        float db2_du = v;
+        float db2_dv = u - 2.0f * v;
+        computeTermDerivs(1, b2, db2_du, db2_dv, dQ2_du, dQ2_dv);
+
+        float b3 = (1.0f - u) * v;
+        float db3_du = -v;
+        float db3_dv = 1.0f - u;
+        computeTermDerivs(2, b3, db3_du, db3_dv, dQ3_du, dQ3_dv);
+
+        dXdu = dLin_du - (dQ1_du + dQ2_du + dQ3_du);
+        dXdv = dLin_dv - (dQ1_dv + dQ2_dv + dQ3_dv);
+    }
+
     static bool checkEdgeConstraintsForTriangle(
         const glm::vec3& x00,
         const glm::vec3& x10,
@@ -433,7 +478,7 @@ namespace NagataEnhanced
 
             glm::vec3 p = evaluateSurfaceRaw(patch, enhance, u, v);
             glm::vec3 dXdu, dXdv;
-            NagataPatch::evaluateDerivatives(patch, enhance, u, v, dXdu, dXdv);
+            evaluateDerivativesRaw(patch, enhance, u, v, dXdu, dXdv);
             float jac = glm::dot(glm::cross(dXdu, dXdv), n_ref);
             if (jac <= 0.0f)
             {

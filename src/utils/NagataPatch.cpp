@@ -161,6 +161,88 @@ namespace NagataPatch
         return point;
     }
 
+    static void applyEdgeCrossingGuardDerivatives(
+        const NagataPatchData& patch,
+        const PatchEnhancementData& enhance,
+        float u, float v,
+        const glm::vec3& n_ref,
+        glm::vec3& point,
+        glm::vec3& dXdu,
+        glm::vec3& dXdv)
+    {
+        const glm::vec3& x00 = patch.vertices[0];
+        const glm::vec3& x10 = patch.vertices[1];
+        const glm::vec3& x11 = patch.vertices[2];
+
+        const std::array<int, 3> enabled = {
+            enhance.edges[0].enabled ? 1 : 0,
+            enhance.edges[1].enabled ? 1 : 0,
+            enhance.edges[2].enabled ? 1 : 0
+        };
+
+        if (!enabled[0] && !enabled[1] && !enabled[2])
+        {
+            return;
+        }
+
+        struct EdgeInfo
+        {
+            glm::vec3 a;
+            glm::vec3 b;
+            glm::vec3 opp;
+            glm::vec3 c_sharp;
+            float t;
+            float dt_du;
+            float dt_dv;
+            bool enabled;
+        };
+
+        const std::array<EdgeInfo, 3> edges = {{
+            {x00, x10, x11, enhance.edges[0].c_sharp, u, 1.0f, 0.0f, enhance.edges[0].enabled},
+            {x10, x11, x00, enhance.edges[1].c_sharp, v, 0.0f, 1.0f, enhance.edges[1].enabled},
+            {x00, x11, x10, enhance.edges[2].c_sharp, v, 0.0f, 1.0f, enhance.edges[2].enabled}
+        }};
+
+        for (const auto& edge : edges)
+        {
+            if (!edge.enabled)
+            {
+                continue;
+            }
+
+            glm::vec3 e = edge.b - edge.a;
+            glm::vec3 sideDir = glm::cross(n_ref, e);
+            float sideLen = glm::length(sideDir);
+            if (sideLen < 1e-12f)
+            {
+                continue;
+            }
+            sideDir /= sideLen;
+
+            if (glm::dot(sideDir, edge.opp - (edge.a + edge.b) * 0.5f) < 0.0f)
+            {
+                sideDir = -sideDir;
+            }
+
+            float t = edge.t;
+            glm::vec3 edgePoint = (1.0f - t) * edge.a + t * edge.b - edge.c_sharp * t * (1.0f - t);
+            float s = glm::dot(point - edgePoint, sideDir);
+            if (s < 0.0f)
+            {
+                glm::vec3 dEdge_dt = e - edge.c_sharp * (1.0f - 2.0f * t);
+                glm::vec3 dEdge_du = dEdge_dt * edge.dt_du;
+                glm::vec3 dEdge_dv = dEdge_dt * edge.dt_dv;
+
+                float ds_du = glm::dot(dXdu - dEdge_du, sideDir);
+                float ds_dv = glm::dot(dXdv - dEdge_dv, sideDir);
+
+                point -= s * sideDir;
+                dXdu -= ds_du * sideDir;
+                dXdv -= ds_dv * sideDir;
+            }
+        }
+    }
+
     void computeEffectiveCoefficients(
         const NagataPatchData& patch, 
         const PatchEnhancementData& enhance,
@@ -252,48 +334,78 @@ namespace NagataPatch
         float u, float v,
         glm::vec3& dXdu, glm::vec3& dXdv)
     {
-        BlendingResult blend;
-        computeEffectiveCoefficients(patch, enhance, u, v, blend);
-
         const glm::vec3& x00 = patch.vertices[0];
         const glm::vec3& x10 = patch.vertices[1];
         const glm::vec3& x11 = patch.vertices[2];
 
-        // --- Linear Part Derivatives ---
-        glm::vec3 dLin_du = -x00 + x10;
-        glm::vec3 dLin_dv = -x10 + x11;
-
-        // --- Quadratic Part Derivatives ---
-        auto computeTermDerivs = [&](int idx, float b, float db_du, float db_dv, glm::vec3& dq_du, glm::vec3& dq_dv)
+        auto computeDerivativesWithBlend = [&](const BlendingResult& blendData, glm::vec3& outDu, glm::vec3& outDv)
         {
-            dq_du = blend.dc_du[idx] * b + blend.c_eff[idx] * db_du;
-            dq_dv = blend.dc_dv[idx] * b + blend.c_eff[idx] * db_dv;
+            glm::vec3 dLin_du = -x00 + x10;
+            glm::vec3 dLin_dv = -x10 + x11;
+
+            auto computeTermDerivs = [&](int idx, float b, float db_du, float db_dv, glm::vec3& dq_du, glm::vec3& dq_dv)
+            {
+                dq_du = blendData.dc_du[idx] * b + blendData.c_eff[idx] * db_du;
+                dq_dv = blendData.dc_dv[idx] * b + blendData.c_eff[idx] * db_dv;
+            };
+
+            glm::vec3 dQ1_du, dQ1_dv;
+            glm::vec3 dQ2_du, dQ2_dv;
+            glm::vec3 dQ3_du, dQ3_dv;
+
+            float b1 = (1.0f - u) * (u - v);
+            float db1_du = 1.0f - 2.0f * u + v;
+            float db1_dv = u - 1.0f;
+            computeTermDerivs(0, b1, db1_du, db1_dv, dQ1_du, dQ1_dv);
+
+            float b2 = (u - v) * v;
+            float db2_du = v;
+            float db2_dv = u - 2.0f * v;
+            computeTermDerivs(1, b2, db2_du, db2_dv, dQ2_du, dQ2_dv);
+
+            float b3 = (1.0f - u) * v;
+            float db3_du = -v;
+            float db3_dv = 1.0f - u;
+            computeTermDerivs(2, b3, db3_du, db3_dv, dQ3_du, dQ3_dv);
+
+            outDu = dLin_du - (dQ1_du + dQ2_du + dQ3_du);
+            outDv = dLin_dv - (dQ1_dv + dQ2_dv + dQ3_dv);
         };
 
-        glm::vec3 dQ1_du, dQ1_dv;
-        glm::vec3 dQ2_du, dQ2_dv;
-        glm::vec3 dQ3_du, dQ3_dv;
+        BlendingResult blend;
+        computeEffectiveCoefficients(patch, enhance, u, v, blend);
+        computeDerivativesWithBlend(blend, dXdu, dXdv);
 
-        // Term 1: Basis b1 = (1-u)(u-v)
-        float b1 = (1.0f - u) * (u - v);
-        float db1_du = 1.0f - 2.0f * u + v;
-        float db1_dv = u - 1.0f;
-        computeTermDerivs(0, b1, db1_du, db1_dv, dQ1_du, dQ1_dv);
+        if (!anyEdgeEnabled(enhance))
+        {
+            return;
+        }
 
-        // Term 2: Basis b2 = (u-v)v
-        float b2 = (u - v) * v;
-        float db2_du = v;
-        float db2_dv = u - 2.0f * v;
-        computeTermDerivs(1, b2, db2_du, db2_dv, dQ2_du, dQ2_dv);
+        glm::vec3 n_ref;
+        if (!computeReferenceNormal(patch, n_ref))
+        {
+            return;
+        }
 
-        // Term 3: Basis b3 = (1-u)v
-        float b3 = (1.0f - u) * v;
-        float db3_du = -v;
-        float db3_dv = 1.0f - u;
-        computeTermDerivs(2, b3, db3_du, db3_dv, dQ3_du, dQ3_dv);
+        float jac = glm::dot(glm::cross(dXdu, dXdv), n_ref);
+        if (jac <= 0.0f)
+        {
+            PatchEnhancementData noEnhance;
+            BlendingResult blendOrig;
+            computeEffectiveCoefficients(patch, noEnhance, u, v, blendOrig);
+            computeDerivativesWithBlend(blendOrig, dXdu, dXdv);
+            return;
+        }
 
-        dXdu = dLin_du - (dQ1_du + dQ2_du + dQ3_du);
-        dXdv = dLin_dv - (dQ1_dv + dQ2_dv + dQ3_dv);
+        float oneMinusU = 1.0f - u;
+        float uMinusV = u - v;
+        glm::vec3 P_lin = x00 * oneMinusU + x10 * uMinusV + x11 * v;
+        glm::vec3 Q1 = blend.c_eff[0] * (oneMinusU * uMinusV);
+        glm::vec3 Q2 = blend.c_eff[1] * (uMinusV * v);
+        glm::vec3 Q3 = blend.c_eff[2] * (oneMinusU * v);
+        glm::vec3 point = P_lin - Q1 - Q2 - Q3;
+
+        applyEdgeCrossingGuardDerivatives(patch, enhance, u, v, n_ref, point, dXdu, dXdv);
     }
     
     // =========================================================================
