@@ -28,6 +28,7 @@ void printUsage(const char* programName)
               << "  --algorithm <type>       Algorithm: continuity, no_continuity, uniform (default: continuity)\n"
               << "  --sdf_format <format>    SDF format: octree, exact_octree, hybrid (default: octree)\n"
               << "  --termination <threshold> Termination threshold (default: 1e-3)\n"
+              << "  --hybrid_disable_enhancement Disable crease enhancement in hybrid mode (plain Nagata)\n"
               << "  --num_threads <n>        Number of threads (default: 1)\n"
               << "  --help                   Show this help message\n";
 }
@@ -41,6 +42,7 @@ struct Options
     sdflib::OctreeSdf::InitAlgorithm algorithm = sdflib::OctreeSdf::InitAlgorithm::CONTINUITY;
     std::string sdfFormat = "octree";
     float terminationThreshold = 1e-3f;
+    bool hybridDisableEnhancement = false;
     uint32_t numThreads = 1;
 };
 
@@ -93,6 +95,10 @@ bool parseArgs(int argc, char** argv, Options& opts)
         {
             opts.terminationThreshold = std::stof(argv[++i]);
         }
+        else if (arg == "--hybrid_disable_enhancement")
+        {
+            opts.hybridDisableEnhancement = true;
+        }
         else if (arg == "--num_threads" && i + 1 < argc)
         {
             opts.numThreads = std::stoi(argv[++i]);
@@ -140,6 +146,10 @@ int main(int argc, char** argv)
     SPDLOG_INFO("Start depth: {}", opts.startDepth);
     SPDLOG_INFO("SDF format: {}", opts.sdfFormat);
     SPDLOG_INFO("Termination threshold: {}", opts.terminationThreshold);
+    if (opts.sdfFormat == "hybrid")
+    {
+        SPDLOG_INFO("Hybrid enhancement: {}", opts.hybridDisableEnhancement ? "disabled (plain Nagata)" : "enabled");
+    }
     SPDLOG_INFO("Threads: {}", opts.numThreads);
 
     sdflib::Timer timer;
@@ -213,12 +223,18 @@ int main(int argc, char** argv)
             // 1. Create Nagata Patches
             patches = sdflib::MeshBinaryLoader::createNagataPatchData(meshData);
             
-            // 2. Compute Enhanced Nagata Data (crease detection + c_sharp coefficients)
-            sdflib::NagataEnhanced::EnhancedNagataData enhancedData = 
-                sdflib::NagataEnhanced::computeOrLoadEnhancedData(
+            sdflib::NagataEnhanced::EnhancedNagataData enhancedData;
+            if (!opts.hybridDisableEnhancement)
+            {
+                // 2. Compute Enhanced Nagata Data (crease detection + c_sharp coefficients)
+                enhancedData = sdflib::NagataEnhanced::computeOrLoadEnhancedData(
                     meshData.vertices, meshData.faces, meshData.faceNormals, opts.inputFile);
-            
-            SPDLOG_INFO("Detected {} crease edges", enhancedData.c_sharps.size());
+                SPDLOG_INFO("Detected {} crease edges", enhancedData.c_sharps.size());
+            }
+            else
+            {
+                SPDLOG_INFO("Hybrid enhancement disabled: using original Nagata coefficients");
+            }
             
             // 3. Convert EnhancedNagataData to PatchEnhancementData vector
             // Note: PatchEnhancementData is a simpler format used by NagataTrianglesInfluenceForBuild
@@ -247,7 +263,10 @@ int main(int argc, char** argv)
                 setEdge(2, face[0], face[2]);
             }
 
-            SPDLOG_INFO("Enabled {} crease-edges on patches (total)", enabledEdgesTotal);
+            if (!opts.hybridDisableEnhancement)
+            {
+                SPDLOG_INFO("Enabled {} crease-edges on patches (total)", enabledEdgesTotal);
+            }
             
             // 4. Create mesh object for Octree structure
             std::vector<uint32_t> flattenedIndices;

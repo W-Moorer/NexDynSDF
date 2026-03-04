@@ -16,9 +16,36 @@
 | `visualize_obj_nagata.py` | OBJ文件Nagata曲面可视化（支持法向量计算） | PyVista |
 | `nagata_exporter.py` | NSM增强Nagata细分导出OBJ | - |
 | `validate_nagata.py` | C++/Python Nagata结果对比验证 | - |
+| `paper1_rmse_pipeline.py` | 论文实验一键流水线（RMSE/L∞、CSV、LaTeX表、绘图） | Matplotlib |
 | `visualize_sdf.py` | SDF零等值面可视化 | Matplotlib / Plotly |
 | `visualize_sdf_pyvista.py` | SDF零等值面可视化（交互式） | PyVista |
 | `visualize_sdf_pyvista_offscreen.py` | SDF零等值面可视化（离屏渲染保存图片） | PyVista |
+
+---
+
+## 快速入口：论文RMSE/L∞流水线
+
+### Python一键运行
+```bash
+python pytools/paper1_rmse_pipeline.py \
+  --models models/nsm/Gear_I.nsm models/nsm/Gear_II.nsm \
+  --methods planar ours \
+  --out_dir output/paper1_rmse \
+  --depth 8 --start_depth 1 --termination 1e-3 --grid 128
+```
+
+### PowerShell一键运行
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/run_paper1_rmse.ps1 `
+  -Models models/nsm/Gear_I.nsm,models/nsm/Gear_II.nsm `
+  -OutDir output/paper1_rmse -Depth 8 -Grid 128
+```
+
+输出文件：
+- `metrics_detailed.csv`：逐模型逐方法误差
+- `metrics_summary.csv`：方法级汇总（均值/方差）
+- `table_sdf_rmse_linf.tex`：可直接贴论文的LaTeX表格
+- `rmse_linf_summary.png` / `rmse_linf_per_model.png`：图表
 
 ---
 
@@ -548,3 +575,50 @@ python visualize_sdf_pyvista_offscreen.py data.raw -o output.png
 - **2025-02-01**: 添加 `visualize_sdf_pyvista_offscreen.py` - 离屏渲染版本
 - **2025-01-31**: 添加 `visualize_sdf_pyvista.py` - PyVista交互式可视化
 - **2025-01-30**: 添加 `visualize_sdf.py` - 基础SDF可视化工具
+
+---
+
+## Paper-1 Automation Additions (2026-03-04)
+
+### 1) Auto benchmark model suite
+```bash
+python demos/generate_benchmark_nsm_suite.py --profile quick
+python demos/generate_benchmark_nsm_suite.py --profile full --force
+```
+
+Outputs:
+- `output/benchmarks/models/*.nsm`
+- `output/benchmarks/models/benchmark_models.txt`
+- `output/benchmarks/models/benchmark_models_meta.csv`
+
+### 2) Batch model image rendering + TeX snippet
+```bash
+python pytools/render_model_images.py \
+  --models_file output/benchmarks/models/benchmark_models.txt \
+  --out_dir output/paper1_rmse/model_images \
+  --tex_out output/paper1_rmse/fig_models_auto.tex \
+  --gallery_out output/paper1_rmse/models_gallery.png \
+  --cols 3 --force
+```
+
+Outputs:
+- per-model PNG images
+- gallery PNG
+- TeX snippet with `\\includegraphics` entries
+
+### 3) Unified RMSE/Linf pipeline with auto benchmark + auto images
+```bash
+python pytools/paper1_rmse_pipeline.py \
+  --auto_benchmarks --benchmark_profile quick \
+  --render_model_images --models_tex_cols 3 \
+  --methods planar ours --out_dir output/paper1_rmse \
+  --depth 8 --start_depth 1 --termination 1e-3 --grid 128
+```
+
+### 4) PowerShell one-click wrapper
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/run_paper1_rmse.ps1 `
+  -AutoBenchmarks -BenchmarkProfile quick `
+  -RenderModelImages -ModelsTexCols 3 `
+  -OutDir output/paper1_rmse -Depth 8 -Grid 128
+```

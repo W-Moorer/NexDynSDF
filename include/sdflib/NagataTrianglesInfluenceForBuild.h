@@ -409,10 +409,13 @@ struct NagataTrianglesInfluenceForBuild
 
             // Find best candidate using Nagata projection
             float minExactDistSq = 9.0e8f;
+            float secondExactDistSq = 9.0e8f;
             
             uint32_t bestTriIdx = 0;
             glm::vec3 bestNearestPt(0.0f);
             float bestU = 0.0f, bestV = 0.0f;
+            uint32_t secondTriIdx = 0;
+            bool hasSecondCandidate = false;
             bool foundValid = false;
 
             for(uint32_t t : candidates[i])
@@ -448,12 +451,22 @@ struct NagataTrianglesInfluenceForBuild
 
                 if (d2 < minExactDistSq)
                 {
+                    secondExactDistSq = minExactDistSq;
+                    secondTriIdx = bestTriIdx;
+                    hasSecondCandidate = foundValid;
+
                     minExactDistSq = d2;
                     bestTriIdx = t;
                     bestNearestPt = result.nearestPoint;
                     bestU = result.parameter.x;
                     bestV = result.parameter.y;
                     foundValid = true;
+                }
+                else if (d2 < secondExactDistSq)
+                {
+                    secondExactDistSq = d2;
+                    secondTriIdx = t;
+                    hasSecondCandidate = true;
                 }
             }
             
@@ -555,6 +568,28 @@ struct NagataTrianglesInfluenceForBuild
             {
                 // On surface, use surface normal
                 finalGradient = surfNormal;
+            }
+
+            // Thin-sheet ambiguity guard:
+            // Enable only for near-planar, opposite-facing patch pairs at nearly identical
+            // nearest distance (e.g., thin parallel faces). This avoids affecting generic curved
+            // geometries that may also have multi-candidate nearest points.
+            const bool hasSecond = hasSecondCandidate && std::isfinite(secondExactDistSq) && (secondExactDistSq < 9.0e8f);
+            const float distGap = hasSecond ? std::abs(std::sqrt(secondExactDistSq) - dist) : FLT_MAX;
+            const float ambEps = glm::max(1.0e-5f, 0.02f * nodeHalfSize);
+            const bool ambiguousNearest = hasSecond && (distGap <= ambEps);
+
+            bool nearPlanarPair = false;
+            if (hasSecond)
+            {
+                const float bestDefl = mPatches[bestTriIdx].maxDeflection;
+                const float secondDefl = mPatches[secondTriIdx].maxDeflection;
+                nearPlanarPair = (bestDefl <= 1.0e-5f) && (secondDefl <= 1.0e-5f);
+            }
+
+            if (ambiguousNearest && nearPlanarPair && sign < 0.0f)
+            {
+                finalGradient = glm::vec3(0.0f);
             }
 
             // Sanitize Gradient
